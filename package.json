@@ -1,20 +1,17 @@
 {
-  "name": "geggamoja-feed-api",
+  "name": "geggamoja-feed-pages",
   "version": "1.0.0",
   "private": true,
-  "description": "Internal web app for generating the Geggamoja Spacefoot B2B Shopify catalog CSV feed.",
+  "description": "GitHub Pages and GitHub Actions generator for the Geggamoja Spacefoot B2B Shopify catalog CSV feed.",
   "type": "module",
-  "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "generate": "node scripts/generate-feed.mjs",
+    "verify": "node verify-shopify-catalog.mjs",
     "test": "node --test"
   },
   "dependencies": {
     "csv-stringify": "^6.5.2",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "express-session": "^1.18.1"
+    "dotenv": "^16.4.7"
   },
   "engines": {
     "node": ">=18"

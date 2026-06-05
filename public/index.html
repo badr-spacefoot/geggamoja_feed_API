@@ -3,157 +3,74 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Geggamoja CSV Feed</title>
+    <title>Geggamoja Spacefoot B2B Feed</title>
     <style>
       :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { background: #f7f4ef; color: #222; margin: 0; min-height: 100vh; }
-      header { align-items: center; display: flex; justify-content: space-between; padding: 1rem 1.5rem; }
-      main { background: #fff; border-radius: 22px; box-shadow: 0 16px 40px rgb(0 0 0 / 10%); margin: 3rem auto; max-width: 760px; padding: 2rem; width: calc(100% - 2rem); }
-      h1 { font-size: clamp(2rem, 7vw, 4rem); margin: 0; }
-      p { color: #555; font-size: 1.1rem; line-height: 1.6; }
-      a.button, button { background: #1d4f3f; border: 0; border-radius: 999px; color: #fff; cursor: pointer; display: inline-block; font: inherit; font-weight: 700; margin-right: .75rem; padding: .9rem 1.35rem; text-decoration: none; }
-      button:disabled { cursor: not-allowed; opacity: .65; }
-      .secondary { background: #e8e2d9; color: #222; }
-      .actions { margin-top: 2rem; }
-      .status { border-left: 4px solid #1d4f3f; margin-top: 2rem; padding: .5rem 0 .5rem 1rem; }
-      .progress { background: #e8e2d9; border-radius: 999px; height: 1rem; margin-top: 1rem; overflow: hidden; }
-      .progress-bar { background: #1d4f3f; height: 100%; transition: width .25s ease; width: 0; }
-      .meta { font-size: .95rem; margin-top: .75rem; }
+      body { align-items: center; background: #f7f4ef; color: #222; display: flex; justify-content: center; margin: 0; min-height: 100vh; }
+      main { background: #fff; border-radius: 22px; box-shadow: 0 16px 40px rgb(0 0 0 / 10%); max-width: 760px; padding: 2rem; width: calc(100% - 2rem); }
+      h1 { font-size: clamp(2rem, 7vw, 4rem); margin: 0 0 .5rem; }
+      p { color: #555; font-size: 1.05rem; line-height: 1.6; }
+      dl { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin: 2rem 0; }
+      div.stat { background: #f7f4ef; border-radius: 16px; padding: 1rem; }
+      dt { color: #555; font-size: .9rem; font-weight: 700; margin-bottom: .35rem; text-transform: uppercase; }
+      dd { font-size: 1.2rem; font-weight: 800; margin: 0; }
+      a.button { background: #1d4f3f; border-radius: 999px; color: #fff; display: inline-block; font-weight: 800; padding: .95rem 1.35rem; text-decoration: none; }
+      a.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+      .status { border-left: 4px solid #1d4f3f; margin-top: 1.5rem; padding: .5rem 0 .5rem 1rem; }
       .error { color: #9d1c1c; font-weight: 700; }
-      .download { margin-top: 1rem; }
     </style>
   </head>
   <body>
-    <header>
-      <strong>Geggamoja</strong>
-      <form method="post" action="/logout"><button class="secondary" type="submit">Log out</button></form>
-    </header>
     <main>
       <h1>Geggamoja</h1>
-      <p>Generate and download the Spacefoot / France EUR B2B catalog feed directly from Shopify Admin GraphQL API.</p>
-      <div class="actions">
-        <button id="generateButton" type="button">Generate CSV</button>
-        <a class="button secondary" href="/api/feed/latest.csv" download>Download latest generated CSV</a>
-      </div>
-      <section class="status" aria-live="polite">
-        <strong>Status:</strong> <span id="step">Ready</span>
-        <div class="progress" aria-label="Generation progress"><div id="progressBar" class="progress-bar"></div></div>
-        <p id="counts" class="meta">No job running.</p>
-        <p id="message" class="meta">Click Generate CSV to start a background Shopify export.</p>
-        <p id="error" class="meta error" hidden></p>
-        <p id="download" class="download" hidden><a id="downloadLink" class="button" href="/api/feed/latest.csv" download>Download generated CSV</a></p>
-      </section>
+      <p>Spacefoot / France EUR B2B catalog feed generated automatically from Shopify Admin GraphQL API.</p>
+
+      <dl aria-label="Feed metadata">
+        <div class="stat">
+          <dt>Last generation</dt>
+          <dd id="generatedAt">Loading…</dd>
+        </div>
+        <div class="stat">
+          <dt>Products</dt>
+          <dd id="productCount">Loading…</dd>
+        </div>
+        <div class="stat">
+          <dt>CSV rows</dt>
+          <dd id="rowCount">Loading…</dd>
+        </div>
+      </dl>
+
+      <a id="downloadButton" class="button" href="feed.csv" download aria-disabled="true">Download CSV</a>
+      <p id="status" class="status">Loading feed metadata…</p>
     </main>
+
     <script>
-      const generateButton = document.querySelector('#generateButton');
-      const stepElement = document.querySelector('#step');
-      const progressBar = document.querySelector('#progressBar');
-      const countsElement = document.querySelector('#counts');
-      const messageElement = document.querySelector('#message');
-      const errorElement = document.querySelector('#error');
-      const downloadElement = document.querySelector('#download');
-      const downloadLink = document.querySelector('#downloadLink');
-      let pollTimer;
+      const generatedAt = document.querySelector('#generatedAt');
+      const productCount = document.querySelector('#productCount');
+      const rowCount = document.querySelector('#rowCount');
+      const status = document.querySelector('#status');
+      const downloadButton = document.querySelector('#downloadButton');
 
-      generateButton.addEventListener('click', async () => {
-        resetJobUi();
-        generateButton.disabled = true;
-        try {
-          const response = await fetch('/api/generate', { method: 'POST', headers: { Accept: 'application/json' } });
-          if (!response.ok) {
-            const message = await response.text();
-            if (response.status === 404) {
-              await runLegacyFeedDownload(message);
-              return;
-            }
-            throw new Error(message);
-          }
-          const job = await response.json();
-          renderJob(job);
-          pollTimer = window.setInterval(() => pollJob(job.jobId), 1000);
-        } catch (error) {
-          showError(error.message || 'Could not start CSV generation.');
-          generateButton.disabled = false;
-        }
-      });
-
-      async function runLegacyFeedDownload(originalError) {
-        stepElement.textContent = 'Legacy generation';
-        progressBar.style.width = '15%';
-        countsElement.textContent = 'Using legacy /api/feed.csv route';
-        messageElement.textContent = 'The async endpoint was not found. Restart or redeploy the Node server to enable progress tracking. Generating with the legacy route now...';
-
-        const response = await fetch('/api/feed.csv', { headers: { Accept: 'text/csv' } });
-        if (!response.ok) {
-          throw new Error(`${originalError || 'Async endpoint not found'}; legacy download also failed: ${await response.text()}`);
-        }
-
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        progressBar.style.width = '100%';
-        stepElement.textContent = 'Done';
-        countsElement.textContent = 'Generated with legacy route. Restart the server for progress tracking.';
-        messageElement.textContent = 'CSV generated. Use the download link below.';
-        downloadLink.href = objectUrl;
-        downloadLink.download = `geggamoja-b2b-catalog-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-        downloadElement.hidden = false;
-        errorElement.hidden = true;
-        generateButton.disabled = false;
-      }
-
-      async function pollJob(jobId) {
-        try {
-          const response = await fetch(`/api/generate/status/${encodeURIComponent(jobId)}`, { headers: { Accept: 'application/json' } });
-          if (!response.ok) throw new Error(await response.text());
-          const job = await response.json();
-          renderJob(job);
-          if (job.status === 'completed' || job.status === 'failed') {
-            window.clearInterval(pollTimer);
-            generateButton.disabled = false;
-          }
-        } catch (error) {
-          window.clearInterval(pollTimer);
-          showError(error.message || 'Could not read generation status.');
-          generateButton.disabled = false;
-        }
-      }
-
-      function renderJob(job) {
-        stepElement.textContent = job.step || job.status;
-        messageElement.textContent = job.message || '';
-        const hasTotal = Number(job.total) > 0;
-        const percent = hasTotal ? Math.min(100, Math.round((Number(job.current || 0) / Number(job.total)) * 100)) : 15;
-        progressBar.style.width = `${job.status === 'completed' ? 100 : percent}%`;
-        countsElement.textContent = hasTotal
-          ? `${job.current} / ${job.total}${job.elapsedSeconds !== undefined ? ` · ${job.elapsedSeconds}s elapsed` : ''}`
-          : `${job.current || 0}${job.elapsedSeconds !== undefined ? ` items · ${job.elapsedSeconds}s elapsed` : ' items'}`;
-
-        if (job.status === 'completed') {
-          downloadLink.href = job.downloadUrl || '/api/feed/latest.csv';
-          downloadElement.hidden = false;
-          errorElement.hidden = true;
-        } else if (job.status === 'failed') {
-          showError(job.error || job.message || 'CSV generation failed.');
-        }
-      }
-
-      function resetJobUi() {
-        window.clearInterval(pollTimer);
-        stepElement.textContent = 'Queued';
-        progressBar.style.width = '0';
-        countsElement.textContent = 'Starting...';
-        messageElement.textContent = 'Starting background generation.';
-        errorElement.hidden = true;
-        errorElement.textContent = '';
-        downloadElement.hidden = true;
-      }
-
-      function showError(message) {
-        stepElement.textContent = 'Failed';
-        progressBar.style.width = '0';
-        errorElement.textContent = message;
-        errorElement.hidden = false;
-      }
+      fetch(`feed-meta.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } })
+        .then((response) => {
+          if (!response.ok) throw new Error('Feed metadata is not available yet. Run the GitHub Actions workflow first.');
+          return response.json();
+        })
+        .then((metadata) => {
+          generatedAt.textContent = metadata.generatedAt ? new Date(metadata.generatedAt).toLocaleString() : 'Unknown';
+          productCount.textContent = Number(metadata.productCount ?? 0).toLocaleString();
+          rowCount.textContent = Number(metadata.rowCount ?? 0).toLocaleString();
+          downloadButton.href = metadata.file || 'feed.csv';
+          downloadButton.removeAttribute('aria-disabled');
+          status.textContent = 'Feed is ready.';
+        })
+        .catch((error) => {
+          generatedAt.textContent = 'Not generated';
+          productCount.textContent = '—';
+          rowCount.textContent = '—';
+          status.textContent = error.message;
+          status.classList.add('error');
+        });
     </script>
   </body>
 </html>

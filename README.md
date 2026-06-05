@@ -1,23 +1,34 @@
 # Geggamoja Spacefoot B2B Catalog Feed
 
-Small internal Node.js/Express web app for generating a downloadable CSV feed for the Geggamoja Spacefoot / France EUR B2B Shopify catalog.
+This repository publishes the Geggamoja Spacefoot / France EUR B2B Shopify catalog as a static `feed.csv` file through **GitHub Pages**. A **GitHub Actions** workflow fetches live data from the Shopify Admin GraphQL API, writes `public/feed.csv`, writes `public/feed-meta.json`, and deploys the `public/` folder to Pages.
 
-The app uses Shopify Admin GraphQL API on the server, reads included products from the configured catalog publication, resolves EUR prices from the configured price list, reads variant inventory levels, and returns one CSV row per variant with inventory quantities summed across inventory locations.
+No Express server, always-on backend, or local machine is required after setup.
 
 ## What it provides
 
-- Password-protected internal web UI.
-- `POST /api/generate` and `GET /api/generate/status/:jobId` endpoints for async generation with progress polling.
-- `GET /api/feed.csv` endpoint that still fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
-- Environment-variable based secret management.
-- Product, variant, price-list, and inventory-level pagination with conservative Shopify GraphQL page sizes.
-- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, non-EUR price-list configuration, invalid pagination responses, and Shopify throttle/retry conditions.
+- GitHub Actions workflow that generates `feed.csv`:
+  - manually with `workflow_dispatch`
+  - automatically every day at **06:00 UTC**
+- Shopify credentials loaded only from GitHub Actions secrets.
+- Static GitHub Pages site showing:
+  - last generation date
+  - number of products
+  - number of CSV rows
+  - a **Download CSV** button
+- Shopify Admin GraphQL feed generation with conservative page sizes to avoid Shopify query cost failures.
+- CSV output with one row per variant and the same column set used by the prior app.
+
+## Published files
+
+The workflow deploys these files to GitHub Pages:
+
+```text
+index.html       # Static status/download page
+feed.csv         # Generated catalog feed
+feed-meta.json   # Last generation timestamp, product count, row count
+```
 
 ## CSV columns
-
-The feed intentionally splits Shopify work into smaller Admin GraphQL queries: publication products are fetched without variants, variants are fetched per product, and inventory levels are fetched per inventory item. Product and variant pages are capped at 25 records, product images are capped at 1 image, and inventory is never nested inside the product query. This avoids Shopify single-query cost failures such as `Query cost ... exceeds the single query max cost limit 1000`.
-
-The CSV includes these columns:
 
 ```text
 brand, product_id, product_handle, product_title, product_type, product_status,
@@ -29,22 +40,11 @@ inventory_location_id, inventory_location_name,
 image_url, product_url, tags, updated_at
 ```
 
-## Configure `.env`
+## GitHub setup
 
-Copy the example file and fill in real values:
+### 1. Add GitHub Actions secrets
 
-```bash
-cp .env.example .env
-```
-
-Required app authentication variables:
-
-```env
-APP_PASSWORD=replace-with-a-strong-internal-password
-SESSION_SECRET=replace-with-at-least-32-random-characters
-```
-
-Required Shopify variables:
+In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret** and add:
 
 ```env
 SHOPIFY_SHOP_DOMAIN=geggamojab2b.myshopify.com
@@ -56,103 +56,60 @@ SHOPIFY_PUBLICATION_GID=gid://shopify/Publication/186172997771
 SHOPIFY_PRICE_LIST_GID=gid://shopify/PriceList/26895024267
 ```
 
-Notes:
+`SHOPIFY_ADMIN_ACCESS_TOKEN` must only be stored as a GitHub secret. It is never written to `public/`, `feed.csv`, `feed-meta.json`, or frontend JavaScript.
 
-- Use a Shopify Admin API access token with the minimum scopes required to read products, publications/catalogs, price lists, and inventory.
-- `SHOPIFY_ADMIN_ACCESS_TOKEN` is only read by server-side code. Do not put it in frontend JavaScript, static HTML, or client-side build variables.
-- Use the Spacefoot / France EUR catalog IDs shown above, not the full shop catalog. `SHOPIFY_CATALOG_ID` is optional when `SHOPIFY_CATALOG_GID` is present, but keeping both is useful for human cross-checking.
+### 2. Enable GitHub Pages from Actions
 
-## Run locally
+In the repository, open **Settings → Pages** and set **Build and deployment → Source** to **GitHub Actions**.
 
-Install dependencies:
+### 3. Run the workflow
+
+Open **Actions → Generate Shopify catalog feed → Run workflow**.
+
+The same workflow also runs every day at **06:00 UTC**:
+
+```yaml
+schedule:
+  - cron: '0 6 * * *'
+```
+
+## Workflow details
+
+The workflow is defined in `.github/workflows/generate-feed.yml` and does the following:
+
+1. Checks out the repository.
+2. Installs Node.js dependencies.
+3. Runs `npm run generate` with Shopify values from GitHub Secrets.
+4. Writes `public/feed.csv` and `public/feed-meta.json`.
+5. Uploads `public/` as a GitHub Pages artifact.
+6. Deploys the artifact to GitHub Pages.
+
+## Local verification, optional
+
+Local execution is optional. If you want to test before relying on Actions:
 
 ```bash
+cp .env.example .env
 npm install
-```
-
-Start the app:
-
-```bash
-npm start
-```
-
-For development with Node's watch mode:
-
-```bash
-npm run dev
-```
-
-Run the lightweight unit tests:
-
-```bash
+npm run verify
+npm run generate
 npm test
 ```
 
-Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to start a background job. The page polls `/api/generate/status/:jobId` every second, shows the current step/progress/message, and displays a download link when the generated CSV is ready. The latest in-memory copy is available at `/api/feed/latest.csv` and `/api/latest-feed.csv` until the server restarts. The legacy `/api/feed.csv` route still generates and downloads a CSV synchronously.
-
-You can also verify the Shopify catalog configuration without starting the web app:
-
-```bash
-node verify-shopify-catalog.mjs
-```
-
-### Troubleshooting `Not found: /api/generate`
-
-If the page shows `Not found: /api/generate`, the browser is using the new static UI but the running Node process does not have the async API route loaded yet. Restart or redeploy the server after pulling the latest code:
-
-```bash
-npm start
-```
-
-The UI will try the legacy `/api/feed.csv` download route as a fallback, but progress tracking requires the restarted server with `POST /api/generate` available.
-
-
-## Deploy safely
-
-- Deploy to a server platform that can run Node.js backend code, such as a private VM, Render, Fly.io, Heroku, Railway, AWS ECS/App Runner, Google Cloud Run, or Azure App Service.
-- Configure all secrets in the hosting provider's environment variable / secret manager UI.
-- Serve the app over HTTPS only.
-- In production, set `NODE_ENV=production`.
-- If the app is behind a trusted HTTPS reverse proxy, set `TRUST_PROXY=true` so secure cookies work correctly.
-- Restrict access further with VPN, IP allowlists, SSO, or an internal network where possible.
-- Rotate `APP_PASSWORD`, `SESSION_SECRET`, and the Shopify Admin token if they are exposed.
-
-## Why GitHub Pages alone is not suitable
-
-GitHub Pages only serves static files. This project needs server-side code to protect `SHOPIFY_ADMIN_ACCESS_TOKEN`, create authenticated sessions, call Shopify Admin GraphQL API, handle pagination and throttling, and stream a generated CSV. Putting the token into a static GitHub Pages frontend would expose the Shopify Admin token to anyone who can view the page source or browser network requests.
-
-## Project structure
+Generated local output is written to:
 
 ```text
-src/
-  auth.js      # Login, logout, and route guard helpers
-  feed.js      # Shopify feed normalization and CSV generation
-  server.js    # Express app and routes
-  shopify.js   # Shopify Admin GraphQL client and environment validation
-public/
-  index.html   # Authenticated internal UI
-  login.html   # Password login page
+public/feed.csv
+public/feed-meta.json
 ```
 
+## Why this no longer needs a server
 
-## Git branch troubleshooting
+GitHub Actions is the trusted backend. It receives the Shopify Admin credentials from GitHub Secrets, generates static output files, and publishes only safe files to GitHub Pages. GitHub Pages then serves static HTML/JSON/CSV only, so there is no server process to host, monitor, or restart.
 
-If `git pull` says `Déjà à jour` / `Already up to date` after Git fetches another branch, your current local branch probably is not tracking that remote branch. Check your current branch with:
+## Security notes
 
-```bash
-git branch --show-current
-```
-
-Then switch to the generated branch explicitly, for example:
-
-```bash
-git fetch origin
-git checkout codex/create-node.js-express-web-app-for-csv-feed
-git pull --ff-only
-```
-
-Or, if the branch only exists on the remote:
-
-```bash
-git checkout -t origin/codex/create-node.js-express-web-app-for-csv-feed
-```
+- Do not commit `.env` or real Shopify tokens.
+- Do not add Shopify secrets to `public/index.html` or any other file under `public/`.
+- Rotate the Shopify Admin token if it is exposed.
+- The generated CSV is public to anyone who can access the GitHub Pages site. If the feed must be private, use a private distribution mechanism instead of public GitHub Pages.

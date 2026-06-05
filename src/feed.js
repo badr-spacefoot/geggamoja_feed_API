@@ -163,7 +163,7 @@ export async function generateFeed(env = process.env, options = {}) {
     message: `Generated ${rows.length} CSV rows.`
   });
 
-  return { csv, rowCount: rows.length };
+  return { csv, rowCount: rows.length, productCount: countUniqueProducts(rows) };
 }
 
 export async function buildFeedRows(env = process.env, client = createShopifyClient(env), options = {}) {
@@ -449,4 +449,9 @@ function latestTimestamp(...timestamps) {
   const dates = timestamps.filter(Boolean).map((value) => new Date(value)).filter((date) => !Number.isNaN(date.valueOf()));
   if (dates.length === 0) return '';
   return new Date(Math.max(...dates.map((date) => date.valueOf()))).toISOString();
+}
+
+
+function countUniqueProducts(rows) {
+  return new Set(rows.map((row) => row.product_id).filter(Boolean)).size;
 }
