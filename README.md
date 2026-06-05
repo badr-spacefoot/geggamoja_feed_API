@@ -96,6 +96,17 @@ You can also verify the Shopify catalog configuration without starting the web a
 node verify-shopify-catalog.mjs
 ```
 
+### Troubleshooting `Not found: /api/generate`
+
+If the page shows `Not found: /api/generate`, the browser is using the new static UI but the running Node process does not have the async API route loaded yet. Restart or redeploy the server after pulling the latest code:
+
+```bash
+npm start
+```
+
+The UI will try the legacy `/api/feed.csv` download route as a fallback, but progress tracking requires the restarted server with `POST /api/generate` available.
+
+
 ## Deploy safely
 
 - Deploy to a server platform that can run Node.js backend code, such as a private VM, Render, Fly.io, Heroku, Railway, AWS ECS/App Runner, Google Cloud Run, or Azure App Service.

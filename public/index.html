@@ -60,7 +60,14 @@
         generateButton.disabled = true;
         try {
           const response = await fetch('/api/generate', { method: 'POST', headers: { Accept: 'application/json' } });
-          if (!response.ok) throw new Error(await response.text());
+          if (!response.ok) {
+            const message = await response.text();
+            if (response.status === 404) {
+              await runLegacyFeedDownload(message);
+              return;
+            }
+            throw new Error(message);
+          }
           const job = await response.json();
           renderJob(job);
           pollTimer = window.setInterval(() => pollJob(job.jobId), 1000);
@@ -69,6 +76,30 @@
           generateButton.disabled = false;
         }
       });
+
+      async function runLegacyFeedDownload(originalError) {
+        stepElement.textContent = 'Legacy generation';
+        progressBar.style.width = '15%';
+        countsElement.textContent = 'Using legacy /api/feed.csv route';
+        messageElement.textContent = 'The async endpoint was not found. Restart or redeploy the Node server to enable progress tracking. Generating with the legacy route now...';
+
+        const response = await fetch('/api/feed.csv', { headers: { Accept: 'text/csv' } });
+        if (!response.ok) {
+          throw new Error(`${originalError || 'Async endpoint not found'}; legacy download also failed: ${await response.text()}`);
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        progressBar.style.width = '100%';
+        stepElement.textContent = 'Done';
+        countsElement.textContent = 'Generated with legacy route. Restart the server for progress tracking.';
+        messageElement.textContent = 'CSV generated. Use the download link below.';
+        downloadLink.href = objectUrl;
+        downloadLink.download = `geggamoja-b2b-catalog-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+        downloadElement.hidden = false;
+        errorElement.hidden = true;
+        generateButton.disabled = false;
+      }
 
       async function pollJob(jobId) {
         try {
