@@ -12,9 +12,15 @@
       h1 { font-size: clamp(2rem, 7vw, 4rem); margin: 0; }
       p { color: #555; font-size: 1.1rem; line-height: 1.6; }
       a.button, button { background: #1d4f3f; border: 0; border-radius: 999px; color: #fff; cursor: pointer; display: inline-block; font: inherit; font-weight: 700; margin-right: .75rem; padding: .9rem 1.35rem; text-decoration: none; }
+      button:disabled { cursor: not-allowed; opacity: .65; }
       .secondary { background: #e8e2d9; color: #222; }
       .actions { margin-top: 2rem; }
       .status { border-left: 4px solid #1d4f3f; margin-top: 2rem; padding: .5rem 0 .5rem 1rem; }
+      .progress { background: #e8e2d9; border-radius: 999px; height: 1rem; margin-top: 1rem; overflow: hidden; }
+      .progress-bar { background: #1d4f3f; height: 100%; transition: width .25s ease; width: 0; }
+      .meta { font-size: .95rem; margin-top: .75rem; }
+      .error { color: #9d1c1c; font-weight: 700; }
+      .download { margin-top: 1rem; }
     </style>
   </head>
   <body>
@@ -26,10 +32,97 @@
       <h1>Geggamoja</h1>
       <p>Generate and download the Spacefoot / France EUR B2B catalog feed directly from Shopify Admin GraphQL API.</p>
       <div class="actions">
-        <a class="button" href="/api/feed.csv" download>Generate CSV</a>
+        <button id="generateButton" type="button">Generate CSV</button>
         <a class="button secondary" href="/api/feed/latest.csv" download>Download latest generated CSV</a>
       </div>
-      <p class="status">Status: ready. Generate CSV fetches live Shopify data and stores the latest file on this server for the secondary download link.</p>
+      <section class="status" aria-live="polite">
+        <strong>Status:</strong> <span id="step">Ready</span>
+        <div class="progress" aria-label="Generation progress"><div id="progressBar" class="progress-bar"></div></div>
+        <p id="counts" class="meta">No job running.</p>
+        <p id="message" class="meta">Click Generate CSV to start a background Shopify export.</p>
+        <p id="error" class="meta error" hidden></p>
+        <p id="download" class="download" hidden><a id="downloadLink" class="button" href="/api/feed/latest.csv" download>Download generated CSV</a></p>
+      </section>
     </main>
+    <script>
+      const generateButton = document.querySelector('#generateButton');
+      const stepElement = document.querySelector('#step');
+      const progressBar = document.querySelector('#progressBar');
+      const countsElement = document.querySelector('#counts');
+      const messageElement = document.querySelector('#message');
+      const errorElement = document.querySelector('#error');
+      const downloadElement = document.querySelector('#download');
+      const downloadLink = document.querySelector('#downloadLink');
+      let pollTimer;
+
+      generateButton.addEventListener('click', async () => {
+        resetJobUi();
+        generateButton.disabled = true;
+        try {
+          const response = await fetch('/api/generate', { method: 'POST', headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(await response.text());
+          const job = await response.json();
+          renderJob(job);
+          pollTimer = window.setInterval(() => pollJob(job.jobId), 1000);
+        } catch (error) {
+          showError(error.message || 'Could not start CSV generation.');
+          generateButton.disabled = false;
+        }
+      });
+
+      async function pollJob(jobId) {
+        try {
+          const response = await fetch(`/api/generate/status/${encodeURIComponent(jobId)}`, { headers: { Accept: 'application/json' } });
+          if (!response.ok) throw new Error(await response.text());
+          const job = await response.json();
+          renderJob(job);
+          if (job.status === 'completed' || job.status === 'failed') {
+            window.clearInterval(pollTimer);
+            generateButton.disabled = false;
+          }
+        } catch (error) {
+          window.clearInterval(pollTimer);
+          showError(error.message || 'Could not read generation status.');
+          generateButton.disabled = false;
+        }
+      }
+
+      function renderJob(job) {
+        stepElement.textContent = job.step || job.status;
+        messageElement.textContent = job.message || '';
+        const hasTotal = Number(job.total) > 0;
+        const percent = hasTotal ? Math.min(100, Math.round((Number(job.current || 0) / Number(job.total)) * 100)) : 15;
+        progressBar.style.width = `${job.status === 'completed' ? 100 : percent}%`;
+        countsElement.textContent = hasTotal
+          ? `${job.current} / ${job.total}${job.elapsedSeconds !== undefined ? ` · ${job.elapsedSeconds}s elapsed` : ''}`
+          : `${job.current || 0}${job.elapsedSeconds !== undefined ? ` items · ${job.elapsedSeconds}s elapsed` : ' items'}`;
+
+        if (job.status === 'completed') {
+          downloadLink.href = job.downloadUrl || '/api/feed/latest.csv';
+          downloadElement.hidden = false;
+          errorElement.hidden = true;
+        } else if (job.status === 'failed') {
+          showError(job.error || job.message || 'CSV generation failed.');
+        }
+      }
+
+      function resetJobUi() {
+        window.clearInterval(pollTimer);
+        stepElement.textContent = 'Queued';
+        progressBar.style.width = '0';
+        countsElement.textContent = 'Starting...';
+        messageElement.textContent = 'Starting background generation.';
+        errorElement.hidden = true;
+        errorElement.textContent = '';
+        downloadElement.hidden = true;
+      }
+
+      function showError(message) {
+        stepElement.textContent = 'Failed';
+        progressBar.style.width = '0';
+        errorElement.textContent = message;
+        errorElement.hidden = false;
+      }
+    </script>
   </body>
 </html>

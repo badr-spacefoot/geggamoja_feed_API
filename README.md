@@ -7,7 +7,8 @@ The app uses Shopify Admin GraphQL API on the server, reads included products fr
 ## What it provides
 
 - Password-protected internal web UI.
-- `GET /api/feed.csv` endpoint that fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
+- `POST /api/generate` and `GET /api/generate/status/:jobId` endpoints for async generation with progress polling.
+- `GET /api/feed.csv` endpoint that still fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
 - Environment-variable based secret management.
 - Product, variant, price-list, and inventory-level pagination with conservative Shopify GraphQL page sizes.
 - Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, non-EUR price-list configuration, invalid pagination responses, and Shopify throttle/retry conditions.
@@ -87,7 +88,7 @@ Run the lightweight unit tests:
 npm test
 ```
 
-Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to download the live feed from `/api/feed.csv`; this also keeps an in-memory copy available at `/api/feed/latest.csv` until the server restarts.
+Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to start a background job. The page polls `/api/generate/status/:jobId` every second, shows the current step/progress/message, and displays a download link when the generated CSV is ready. The latest in-memory copy is available at `/api/feed/latest.csv` and `/api/latest-feed.csv` until the server restarts. The legacy `/api/feed.csv` route still generates and downloads a CSV synchronously.
 
 You can also verify the Shopify catalog configuration without starting the web app:
 

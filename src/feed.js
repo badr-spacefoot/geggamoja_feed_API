@@ -131,37 +131,100 @@ const CATALOG_CHECK_QUERY = `#graphql
   }
 `;
 
-export async function generateFeedCsv(env = process.env) {
-  const rows = await buildFeedRows(env);
+export async function generateFeedCsv(env = process.env, options = {}) {
+  const { csv } = await generateFeed(env, options);
+  return csv;
+}
+
+export async function generateFeed(env = process.env, options = {}) {
+  const rows = await buildFeedRows(env, undefined, options);
   if (rows.length === 0) {
     throw new Error('The configured Shopify catalog publication returned no products.');
   }
 
-  return stringify(rows, {
+  reportProgress(options.onProgress, {
+    step: 'Building CSV',
+    current: 0,
+    total: rows.length,
+    message: `Writing ${rows.length} CSV rows.`
+  });
+
+  const csv = stringify(rows, {
     header: true,
     columns: CSV_COLUMNS,
     bom: true,
     quoted_string: true
   });
+
+  reportProgress(options.onProgress, {
+    step: 'Done',
+    current: rows.length,
+    total: rows.length,
+    message: `Generated ${rows.length} CSV rows.`
+  });
+
+  return { csv, rowCount: rows.length };
 }
 
-export async function buildFeedRows(env = process.env, client = createShopifyClient(env)) {
+export async function buildFeedRows(env = process.env, client = createShopifyClient(env), options = {}) {
+  const onProgress = options.onProgress;
+
   await validateCatalogConfiguration(env, client);
-  const [products, priceList] = await Promise.all([
-    fetchPublicationProducts(env.SHOPIFY_PUBLICATION_GID, client),
-    fetchPriceListPrices(env.SHOPIFY_PRICE_LIST_GID, client)
-  ]);
-
-  if (priceList.currency !== 'EUR') {
-    throw new Error(`Expected the configured Shopify price list to use EUR, but received ${priceList.currency}.`);
-  }
-
-  const prices = priceList.prices;
+  const products = await fetchPublicationProducts(env.SHOPIFY_PUBLICATION_GID, client, onProgress);
 
   if (products.length === 0) {
     throw new Error('The configured Shopify catalog publication returned no products.');
   }
 
+  const priceList = await fetchPriceListPrices(env.SHOPIFY_PRICE_LIST_GID, client, onProgress);
+
+  if (priceList.currency !== 'EUR') {
+    throw new Error(`Expected the configured Shopify price list to use EUR, but received ${priceList.currency}.`);
+  }
+
+  reportProgress(onProgress, {
+    step: 'Fetching variants',
+    current: 0,
+    total: products.length,
+    message: `Fetching variants for ${products.length} products.`
+  });
+
+  let variantCount = 0;
+  for (const [index, product] of products.entries()) {
+    product.variants = await fetchProductVariants(product.id, client);
+    variantCount += product.variants.length;
+    reportProgress(onProgress, {
+      step: 'Fetching variants',
+      current: index + 1,
+      total: products.length,
+      message: `Fetched ${product.variants.length} variants for ${product.title}.`
+    });
+  }
+
+  const variants = products.flatMap((product) => product.variants);
+  reportProgress(onProgress, {
+    step: 'Fetching inventory',
+    current: 0,
+    total: variants.length,
+    message: `Fetching inventory for ${variantCount} variants.`
+  });
+
+  for (const [index, variant] of variants.entries()) {
+    if (!variant.inventoryItem?.id) {
+      variant.inventoryItem = variant.inventoryItem ?? { id: '', tracked: '' };
+      variant.inventoryItem.inventoryLevels = { nodes: [] };
+    } else {
+      variant.inventoryItem.inventoryLevels = { nodes: await fetchInventoryLevels(variant.inventoryItem.id, client) };
+    }
+    reportProgress(onProgress, {
+      step: 'Fetching inventory',
+      current: index + 1,
+      total: variants.length,
+      message: `Fetched inventory for ${variant.sku || variant.title || variant.id}.`
+    });
+  }
+
+  const prices = priceList.prices;
   const rows = [];
   for (const product of products) {
     for (const variant of product.variants) {
@@ -192,7 +255,7 @@ async function validateCatalogConfiguration(env, client) {
   }
 }
 
-async function fetchPublicationProducts(publicationId, client) {
+async function fetchPublicationProducts(publicationId, client, onProgress) {
   const products = [];
   let after;
 
@@ -203,21 +266,14 @@ async function fetchPublicationProducts(publicationId, client) {
       throw new Error(`Shopify publication was not found or has no included products connection: ${publicationId}`);
     }
 
-    for (const edge of connection.edges ?? []) {
-      const product = edge.node;
-      product.variants = await fetchProductVariants(product.id, client);
+    products.push(...(connection.edges ?? []).map((edge) => ({ ...edge.node, variants: [] })));
 
-      for (const variant of product.variants) {
-        if (!variant.inventoryItem?.id) {
-          variant.inventoryItem = variant.inventoryItem ?? { id: '', tracked: '' };
-          variant.inventoryItem.inventoryLevels = { nodes: [] };
-          continue;
-        }
-        variant.inventoryItem.inventoryLevels = { nodes: await fetchInventoryLevels(variant.inventoryItem.id, client) };
-      }
-
-      products.push(product);
-    }
+    reportProgress(onProgress, {
+      step: 'Fetching products',
+      current: products.length,
+      total: 0,
+      message: `Fetched ${products.length} products from the catalog publication.`
+    });
 
     assertPageInfo(connection.pageInfo, 'Shopify product pagination failed');
     after = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
@@ -264,7 +320,7 @@ async function fetchInventoryLevels(inventoryItemId, client) {
   return inventoryLevels;
 }
 
-async function fetchPriceListPrices(priceListId, client) {
+async function fetchPriceListPrices(priceListId, client, onProgress) {
   const prices = new Map();
   let after;
   let currency;
@@ -287,11 +343,24 @@ async function fetchPriceListPrices(priceListId, client) {
       });
     }
 
+    reportProgress(onProgress, {
+      step: 'Fetching prices',
+      current: prices.size,
+      total: 0,
+      message: `Fetched ${prices.size} price-list entries.`
+    });
+
     assertPageInfo(connection?.pageInfo, 'Shopify price list pagination failed');
     after = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
   } while (after);
 
   return { prices, currency };
+}
+
+function reportProgress(onProgress, progress) {
+  if (typeof onProgress === 'function') {
+    onProgress(progress);
+  }
 }
 
 function assertPageInfo(pageInfo, message) {
