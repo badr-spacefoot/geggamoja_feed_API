@@ -1,3 +1,4 @@
+const DASHBOARD_VERSION = '2026-06-05-history-thumbnails';
 const REQUIRED_FIELDS = ['variant_sku', 'barcode', 'price_amount', 'image_url', 'product_type'];
 const EURO = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR' });
 const INT = new Intl.NumberFormat('en-US');
