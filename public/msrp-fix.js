@@ -1,4 +1,6 @@
 const MSRP_FIX_VERSION = '2026-06-06-msrp-zero-is-missing';
+const WORKFLOW_PAGE_URL = 'https://github.com/badr-spacefoot/geggamoja_feed_API/actions/workflows/generate-feed.yml';
+let workflowButtonTimer = null;
 
 function hasValidMsrp(row) {
   return isPresent(row.price_amount) && row.price > 0;
@@ -51,5 +53,71 @@ function renderProductGroup(group) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  text('missingPriceLabel', 'Missing MSRP');
+  addSafeWorkflowButton();
+  refreshSafeWorkflowButton();
 });
+
+function addSafeWorkflowButton() {
+  const actions = document.querySelector('.hero-actions');
+  if (!actions || el('runWorkflowButton')) return;
+  const button = document.createElement('button');
+  button.id = 'runWorkflowButton';
+  button.className = 'button secondary';
+  button.type = 'button';
+  button.textContent = 'Run workload';
+  button.addEventListener('click', openWorkflowIfReady);
+  actions.appendChild(button);
+}
+
+async function openWorkflowIfReady() {
+  setRunWorkflowButton('Checking...', true);
+  try {
+    const run = await getLatestWorkflowRunSafe();
+    if (run && isActiveRun(run)) {
+      setFeedStatus('Feed generation already in progress', `Started: ${formatDateTime(run.run_started_at || run.created_at)}`, 'running');
+      setRunWorkflowButton('Workload running', true);
+      scheduleSafeWorkflowButtonRefresh(30000);
+      return;
+    }
+    window.open(WORKFLOW_PAGE_URL, '_blank', 'noopener');
+    setRunWorkflowButton('Open GitHub Actions', false);
+  } catch (error) {
+    showAlert(error.message || 'Could not check GitHub Actions status.', true);
+    setRunWorkflowButton('Open GitHub Actions', false);
+  }
+}
+
+async function refreshSafeWorkflowButton() {
+  const button = el('runWorkflowButton');
+  if (!button) return;
+  try {
+    const run = await getLatestWorkflowRunSafe();
+    if (run && isActiveRun(run)) {
+      setRunWorkflowButton('Workload running', true);
+      scheduleSafeWorkflowButtonRefresh(30000);
+      return;
+    }
+    setRunWorkflowButton('Run workload', false);
+  } catch (_error) {
+    setRunWorkflowButton('Open GitHub Actions', false);
+  }
+}
+
+async function getLatestWorkflowRunSafe() {
+  const response = await fetch(`${ACTIONS_WORKFLOW_RUNS_URL}&ts=${Date.now()}`, { headers: { Accept: 'application/vnd.github+json' } });
+  if (!response.ok) throw new Error(`GitHub Actions returned ${response.status}`);
+  return (await response.json()).workflow_runs?.[0] || null;
+}
+
+function setRunWorkflowButton(label, disabled) {
+  const button = el('runWorkflowButton');
+  if (!button) return;
+  button.textContent = label;
+  button.disabled = disabled;
+  button.classList.toggle('disabled', disabled);
+}
+
+function scheduleSafeWorkflowButtonRefresh(delay) {
+  window.clearTimeout(workflowButtonTimer);
+  workflowButtonTimer = window.setTimeout(refreshSafeWorkflowButton, delay);
+}
