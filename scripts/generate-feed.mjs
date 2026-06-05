@@ -10,6 +10,8 @@ const outputDir = path.resolve('public');
 const feedPath = path.join(outputDir, 'feed.csv');
 const metadataPath = path.join(outputDir, 'feed-meta.json');
 const historyPath = path.join(outputDir, 'feed-history.json');
+const snapshotPath = path.join(outputDir, 'product-snapshot.json');
+const changesPath = path.join(outputDir, 'feed-changes.json');
 
 try {
   const generatedAt = new Date();
@@ -20,7 +22,11 @@ try {
     }
   });
 
-  const stats = calculateStats(parseCsvRecords(csv));
+  const records = parseCsvRecords(csv);
+  const stats = calculateStats(records);
+  const snapshot = buildProductSnapshot(records, generatedAt.toISOString());
+  const previousSnapshot = await loadPublishedJson('product-snapshot.json');
+  const changes = buildChanges(snapshot, previousSnapshot, generatedAt.toISOString());
   const history = await buildHistory({
     generatedAt: generatedAt.toISOString(),
     productCount: stats.productCount || productCount,
@@ -31,6 +37,7 @@ try {
     variantsWithStock: stats.variantsWithStock,
     variantsOutOfStock: stats.variantsOutOfStock,
     qualityScore: stats.qualityScore,
+    badEans: stats.badEans,
     missing: stats.missing,
     rowCount
   });
@@ -45,7 +52,9 @@ try {
         productCount,
         rowCount,
         file: 'feed.csv',
-        historyFile: 'feed-history.json'
+        historyFile: 'feed-history.json',
+        changesFile: 'feed-changes.json',
+        productSnapshotFile: 'product-snapshot.json'
       },
       null,
       2
@@ -53,10 +62,14 @@ try {
     'utf8'
   );
   await writeFile(historyPath, `${JSON.stringify(history, null, 2)}\n`, 'utf8');
+  await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  await writeFile(changesPath, `${JSON.stringify(changes, null, 2)}\n`, 'utf8');
 
   console.log(`Wrote ${feedPath}`);
   console.log(`Wrote ${metadataPath}`);
   console.log(`Wrote ${historyPath}`);
+  console.log(`Wrote ${snapshotPath}`);
+  console.log(`Wrote ${changesPath}`);
   console.log(`Generated ${rowCount} CSV rows for ${productCount} products.`);
 } catch (error) {
   console.error(error);
@@ -72,9 +85,11 @@ function calculateStats(rows) {
   const variantsWithStock = variants.filter((row) => toNumber(row.inventory_available) > 0).length;
   const variantsOutOfStock = variants.length - variantsWithStock;
   const missing = Object.fromEntries(REQUIRED_FIELDS.map((field) => [field, variants.filter((row) => !isPresent(row[field])).length]));
+  const badEans = variants.filter((row) => getEanStatus(row.barcode) === 'bad').length;
   const validRequiredFields = variants.reduce((sum, row) => sum + REQUIRED_FIELDS.filter((field) => isPresent(row[field])).length, 0);
-  const totalRequiredFields = variants.length * REQUIRED_FIELDS.length;
-  const qualityScore = totalRequiredFields ? Math.round((validRequiredFields / totalRequiredFields) * 100) : 0;
+  const validEans = variants.filter((row) => getEanStatus(row.barcode) === 'valid').length;
+  const totalRequiredFields = variants.length * (REQUIRED_FIELDS.length + 1);
+  const qualityScore = totalRequiredFields ? Math.round(((validRequiredFields + validEans) / totalRequiredFields) * 100) : 0;
 
   return {
     productCount: products.size,
@@ -85,12 +100,121 @@ function calculateStats(rows) {
     variantsWithStock,
     variantsOutOfStock,
     missing,
+    badEans,
     qualityScore
   };
 }
 
+function buildProductSnapshot(rows, generatedAt) {
+  const products = new Map();
+  const variants = uniqueRows(rows, variantKey);
+
+  for (const row of variants) {
+    const id = productKey(row);
+    if (!id) continue;
+    const product = products.get(id) ?? {
+      id,
+      title: clean(row.product_title),
+      handle: clean(row.product_handle),
+      productType: clean(row.product_type) || 'Unclassified',
+      status: clean(row.product_status).toUpperCase() || 'UNKNOWN',
+      imageUrl: clean(row.image_url),
+      stock: 0,
+      variantCount: 0,
+      skus: []
+    };
+    product.stock += toNumber(row.inventory_available);
+    product.variantCount += 1;
+    if (clean(row.variant_sku)) product.skus.push(clean(row.variant_sku));
+    if (!product.imageUrl && clean(row.image_url)) product.imageUrl = clean(row.image_url);
+    products.set(id, product);
+  }
+
+  return {
+    generatedAt,
+    products: [...products.values()].sort((a, b) => a.title.localeCompare(b.title)).map((product) => ({
+      ...product,
+      skus: product.skus.slice(0, 12)
+    }))
+  };
+}
+
+function buildChanges(currentSnapshot, previousSnapshot, generatedAt) {
+  const currentProducts = new Map((currentSnapshot?.products ?? []).map((product) => [product.id, product]));
+  const previousProducts = new Map((previousSnapshot?.products ?? []).map((product) => [product.id, product]));
+  const hasPrevious = previousProducts.size > 0;
+
+  const newProducts = hasPrevious
+    ? [...currentProducts.values()]
+        .filter((product) => !previousProducts.has(product.id))
+        .sort((a, b) => b.stock - a.stock || b.variantCount - a.variantCount)
+        .slice(0, 100)
+    : [];
+
+  const removedProducts = hasPrevious
+    ? [...previousProducts.values()]
+        .filter((product) => !currentProducts.has(product.id))
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .slice(0, 100)
+    : [];
+
+  const stockDrops = hasPrevious
+    ? [...currentProducts.values()]
+        .map((product) => {
+          const previous = previousProducts.get(product.id);
+          if (!previous) return null;
+          const delta = product.stock - toNumber(previous.stock);
+          if (delta >= 0) return null;
+          return {
+            id: product.id,
+            title: product.title,
+            handle: product.handle,
+            productType: product.productType,
+            previousStock: toNumber(previous.stock),
+            currentStock: product.stock,
+            delta
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.delta - b.delta)
+        .slice(0, 100)
+    : [];
+
+  const stockIncreases = hasPrevious
+    ? [...currentProducts.values()]
+        .map((product) => {
+          const previous = previousProducts.get(product.id);
+          if (!previous) return null;
+          const delta = product.stock - toNumber(previous.stock);
+          if (delta <= 0) return null;
+          return {
+            id: product.id,
+            title: product.title,
+            handle: product.handle,
+            productType: product.productType,
+            previousStock: toNumber(previous.stock),
+            currentStock: product.stock,
+            delta
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.delta - a.delta)
+        .slice(0, 100)
+    : [];
+
+  return {
+    generatedAt,
+    previousGeneratedAt: previousSnapshot?.generatedAt ?? null,
+    hasPrevious,
+    newProducts,
+    removedProducts,
+    stockDrops,
+    stockIncreases
+  };
+}
+
 async function buildHistory(snapshot) {
-  const previous = await loadPublishedHistory();
+  const previous = await loadPublishedJson('feed-history.json');
   const snapshots = Array.isArray(previous?.snapshots) ? previous.snapshots : [];
   const byDay = new Map();
 
@@ -109,26 +233,26 @@ async function buildHistory(snapshot) {
   };
 }
 
-async function loadPublishedHistory() {
-  const url = getPublishedHistoryUrl();
-  if (!url || typeof fetch !== 'function') return null;
+async function loadPublishedJson(fileName) {
+  const baseUrl = getPublishedBaseUrl();
+  if (!baseUrl || typeof fetch !== 'function') return null;
 
   try {
-    const response = await fetch(`${url}?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
+    const response = await fetch(`${baseUrl}/${fileName}?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
     if (!response.ok) return null;
     return response.json();
   } catch (error) {
-    console.log(`No published history loaded: ${error.message}`);
+    console.log(`No published ${fileName} loaded: ${error.message}`);
     return null;
   }
 }
 
-function getPublishedHistoryUrl() {
-  if (process.env.FEED_HISTORY_URL) return process.env.FEED_HISTORY_URL;
+function getPublishedBaseUrl() {
+  if (process.env.FEED_PAGES_BASE_URL) return process.env.FEED_PAGES_BASE_URL.replace(/\/$/, '');
   const repository = process.env.GITHUB_REPOSITORY;
   if (!repository || !repository.includes('/')) return null;
   const [owner, repo] = repository.split('/');
-  return `https://${owner}.github.io/${repo}/feed-history.json`;
+  return `https://${owner}.github.io/${repo}`;
 }
 
 function parseCsvRecords(csv) {
@@ -196,6 +320,27 @@ function variantKey(row) {
 
 function productKey(row) {
   return clean(row.product_id) || clean(row.product_handle) || clean(row.product_title);
+}
+
+function getEanStatus(value) {
+  const barcode = normalizeBarcode(value);
+  if (!barcode) return 'missing';
+  return isValidEan(barcode) ? 'valid' : 'bad';
+}
+
+function normalizeBarcode(value) {
+  return clean(value).replace(/[\s-]/g, '');
+}
+
+function isValidEan(value) {
+  if (!/^\d{8}$|^\d{13}$/.test(value)) return false;
+  const digits = [...value].map(Number);
+  const checkDigit = digits.pop();
+  const sum = digits.reduce((total, digit, index) => {
+    const weight = value.length === 13 ? (index % 2 === 0 ? 1 : 3) : (index % 2 === 0 ? 3 : 1);
+    return total + digit * weight;
+  }, 0);
+  return (10 - (sum % 10)) % 10 === checkDigit;
 }
 
 function clean(value) {
