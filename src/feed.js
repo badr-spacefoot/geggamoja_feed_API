@@ -1,6 +1,11 @@
 import { stringify } from 'csv-stringify/sync';
 import { createShopifyClient, getCatalogGid } from './shopify.js';
 
+const PRODUCTS_PAGE_SIZE = 25;
+const VARIANTS_PAGE_SIZE = 25;
+const INVENTORY_LEVELS_PAGE_SIZE = 25;
+const PRICE_LIST_PRICES_PAGE_SIZE = 50;
+
 export const CSV_COLUMNS = [
   'brand',
   'product_id',
@@ -37,7 +42,7 @@ const PRODUCTS_QUERY = `#graphql
   query CatalogPublicationProducts($publicationId: ID!, $after: String) {
     publication(id: $publicationId) {
       id
-      includedProducts(first: 50, after: $after) {
+      includedProducts(first: ${PRODUCTS_PAGE_SIZE}, after: $after) {
         pageInfo { hasNextPage endCursor }
         edges {
           cursor
@@ -50,36 +55,9 @@ const PRODUCTS_QUERY = `#graphql
             tags
             updatedAt
             onlineStoreUrl
-            featuredMedia { preview { image { url } } }
+            images(first: 1) { nodes { url } }
             options(first: 3) { name values }
-            variants(first: 100) {
-              pageInfo { hasNextPage endCursor }
-              nodes { ...VariantFields }
-            }
           }
-        }
-      }
-    }
-  }
-
-  fragment VariantFields on ProductVariant {
-    id
-    sku
-    barcode
-    title
-    selectedOptions { name value }
-    price
-    compareAtPrice
-    image { url }
-    updatedAt
-    inventoryItem {
-      id
-      tracked
-      inventoryLevels(first: 50) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          location { id name }
-          quantities(names: ["available", "on_hand", "committed"]) { name quantity }
         }
       }
     }
@@ -90,7 +68,7 @@ const PRODUCT_VARIANTS_QUERY = `#graphql
   query ProductVariants($productId: ID!, $after: String) {
     product(id: $productId) {
       id
-      variants(first: 100, after: $after) {
+      variants(first: ${VARIANTS_PAGE_SIZE}, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
           id
@@ -102,17 +80,7 @@ const PRODUCT_VARIANTS_QUERY = `#graphql
           compareAtPrice
           image { url }
           updatedAt
-          inventoryItem {
-            id
-            tracked
-            inventoryLevels(first: 50) {
-              pageInfo { hasNextPage endCursor }
-              nodes {
-                location { id name }
-                quantities(names: ["available", "on_hand", "committed"]) { name quantity }
-              }
-            }
-          }
+          inventoryItem { id tracked }
         }
       }
     }
@@ -123,7 +91,7 @@ const INVENTORY_LEVELS_QUERY = `#graphql
   query InventoryLevels($inventoryItemId: ID!, $after: String) {
     inventoryItem(id: $inventoryItemId) {
       id
-      inventoryLevels(first: 50, after: $after) {
+      inventoryLevels(first: ${INVENTORY_LEVELS_PAGE_SIZE}, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
           location { id name }
@@ -139,7 +107,7 @@ const PRICE_LIST_PRICES_QUERY = `#graphql
     priceList(id: $priceListId) {
       id
       currency
-      prices(first: 250, after: $after) {
+      prices(first: ${PRICE_LIST_PRICES_PAGE_SIZE}, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes {
           variant { id }
@@ -237,88 +205,61 @@ async function fetchPublicationProducts(publicationId, client) {
 
     for (const edge of connection.edges ?? []) {
       const product = edge.node;
-      const variantConnection = product.variants;
-      product.variants = [...(variantConnection?.nodes ?? [])];
-      if (product.variants.length === 0) continue;
-
-      if (variantConnection?.pageInfo?.hasNextPage) {
-        const additionalVariants = await fetchRemainingVariants(product.id, variantConnection.pageInfo.endCursor, client);
-        product.variants.push(...additionalVariants);
-      }
+      product.variants = await fetchProductVariants(product.id, client);
 
       for (const variant of product.variants) {
-        if (variant.inventoryItem?.inventoryLevels?.pageInfo?.hasNextPage) {
-          const additionalLevels = await fetchRemainingInventoryLevels(
-            variant.inventoryItem.id,
-            variant.inventoryItem.inventoryLevels.pageInfo.endCursor,
-            client
-          );
-          variant.inventoryItem.inventoryLevels.nodes.push(...additionalLevels);
+        if (!variant.inventoryItem?.id) {
+          variant.inventoryItem = variant.inventoryItem ?? { id: '', tracked: '' };
+          variant.inventoryItem.inventoryLevels = { nodes: [] };
+          continue;
         }
+        variant.inventoryItem.inventoryLevels = { nodes: await fetchInventoryLevels(variant.inventoryItem.id, client) };
       }
 
       products.push(product);
     }
 
-    if (connection.pageInfo?.hasNextPage && !connection.pageInfo.endCursor) {
-      throw new Error('Shopify product pagination failed: hasNextPage was true but endCursor was missing.');
-    }
+    assertPageInfo(connection.pageInfo, 'Shopify product pagination failed');
     after = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
   } while (after);
 
   return products;
 }
 
-async function fetchRemainingVariants(productId, after, client) {
+async function fetchProductVariants(productId, client) {
   const variants = [];
-  let cursor = after;
+  let after;
 
-  while (cursor) {
-    const data = await client.graphql(PRODUCT_VARIANTS_QUERY, { productId, after: cursor });
+  do {
+    const data = await client.graphql(PRODUCT_VARIANTS_QUERY, { productId, after });
     const connection = data.product?.variants;
     if (!connection) {
       throw new Error(`Shopify variant pagination failed for product ${productId}.`);
     }
 
-    const nodes = connection.nodes ?? [];
-    for (const variant of nodes) {
-      if (variant.inventoryItem?.inventoryLevels?.pageInfo?.hasNextPage) {
-        const additionalLevels = await fetchRemainingInventoryLevels(
-          variant.inventoryItem.id,
-          variant.inventoryItem.inventoryLevels.pageInfo.endCursor,
-          client
-        );
-        variant.inventoryItem.inventoryLevels.nodes.push(...additionalLevels);
-      }
-    }
-    variants.push(...nodes);
-
-    if (connection.pageInfo?.hasNextPage && !connection.pageInfo.endCursor) {
-      throw new Error(`Shopify variant pagination failed for product ${productId}: missing endCursor.`);
-    }
-    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
-  }
+    variants.push(...(connection.nodes ?? []));
+    assertPageInfo(connection.pageInfo, `Shopify variant pagination failed for product ${productId}`);
+    after = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
+  } while (after);
 
   return variants;
 }
 
-async function fetchRemainingInventoryLevels(inventoryItemId, after, client) {
+async function fetchInventoryLevels(inventoryItemId, client) {
   const inventoryLevels = [];
-  let cursor = after;
+  let after;
 
-  while (cursor) {
-    const data = await client.graphql(INVENTORY_LEVELS_QUERY, { inventoryItemId, after: cursor });
+  do {
+    const data = await client.graphql(INVENTORY_LEVELS_QUERY, { inventoryItemId, after });
     const connection = data.inventoryItem?.inventoryLevels;
     if (!connection) {
       throw new Error(`Shopify inventory pagination failed for inventory item ${inventoryItemId}.`);
     }
 
     inventoryLevels.push(...(connection.nodes ?? []));
-    if (connection.pageInfo?.hasNextPage && !connection.pageInfo.endCursor) {
-      throw new Error(`Shopify inventory pagination failed for inventory item ${inventoryItemId}: missing endCursor.`);
-    }
-    cursor = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
-  }
+    assertPageInfo(connection.pageInfo, `Shopify inventory pagination failed for inventory item ${inventoryItemId}`);
+    after = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
+  } while (after);
 
   return inventoryLevels;
 }
@@ -346,13 +287,17 @@ async function fetchPriceListPrices(priceListId, client) {
       });
     }
 
-    if (connection?.pageInfo?.hasNextPage && !connection.pageInfo.endCursor) {
-      throw new Error('Shopify price list pagination failed: missing endCursor.');
-    }
+    assertPageInfo(connection?.pageInfo, 'Shopify price list pagination failed');
     after = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
   } while (after);
 
   return { prices, currency };
+}
+
+function assertPageInfo(pageInfo, message) {
+  if (pageInfo?.hasNextPage && !pageInfo.endCursor) {
+    throw new Error(`${message}: missing endCursor.`);
+  }
 }
 
 function toCsvRow({ product, variant, inventoryLevel, priceEntry, priceListCurrency, env }) {
@@ -383,7 +328,7 @@ function toCsvRow({ product, variant, inventoryLevel, priceEntry, priceListCurre
     inventory_committed: inventoryLevel.quantities.committed,
     inventory_location_id: inventoryLevel.location?.id ?? '',
     inventory_location_name: inventoryLevel.location?.name ?? '',
-    image_url: variant.image?.url ?? product.featuredMedia?.preview?.image?.url ?? '',
+    image_url: variant.image?.url ?? product.images?.nodes?.[0]?.url ?? '',
     product_url: product.onlineStoreUrl ?? `https://${env.SHOPIFY_SHOP_DOMAIN}/products/${product.handle}`,
     tags: (product.tags ?? []).join(', '),
     updated_at: latestTimestamp(product.updatedAt, variant.updatedAt)

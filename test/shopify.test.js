@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { getCatalogGid, validateShopifyEnv } from '../src/shopify.js';
 
@@ -32,4 +33,21 @@ test('rejects stale non-Catalog catalog gids', () => {
 test('requires the app to identify the catalog by gid or numeric id', () => {
   const { SHOPIFY_CATALOG_GID: _gid, SHOPIFY_CATALOG_ID: _id, ...envWithoutCatalog } = VALID_ENV;
   assert.throws(() => validateShopifyEnv(envWithoutCatalog), /SHOPIFY_CATALOG_GID or SHOPIFY_CATALOG_ID/);
+});
+
+test('feed GraphQL queries keep Shopify connection page sizes conservative', async () => {
+  const feedSource = await readFile(new URL('../src/feed.js', import.meta.url), 'utf8');
+
+  assert.match(feedSource, /const PRODUCTS_PAGE_SIZE = 25;/);
+  assert.match(feedSource, /const VARIANTS_PAGE_SIZE = 25;/);
+  assert.match(feedSource, /const INVENTORY_LEVELS_PAGE_SIZE = 25;/);
+  assert.match(feedSource, /images\(first: 1\)/);
+  assert.doesNotMatch(feedSource, /variants\(first: 100/);
+
+  const productsQuery = feedSource.match(new RegExp('const PRODUCTS_QUERY = `[\\s\\S]*?`;'))?.[0] ?? '';
+  const variantsQuery = feedSource.match(new RegExp('const PRODUCT_VARIANTS_QUERY = `[\\s\\S]*?`;'))?.[0] ?? '';
+
+  assert.doesNotMatch(productsQuery, /variants\(first:/);
+  assert.doesNotMatch(productsQuery, /inventoryLevels\(first:/);
+  assert.doesNotMatch(variantsQuery, /inventoryLevels\(first:/);
 });

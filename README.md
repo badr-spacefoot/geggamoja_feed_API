@@ -9,10 +9,12 @@ The app uses Shopify Admin GraphQL API on the server, reads included products fr
 - Password-protected internal web UI.
 - `GET /api/feed.csv` endpoint that fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
 - Environment-variable based secret management.
-- Product, variant, price-list, and inventory-level pagination.
-- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, non-EUR price-list configuration, and invalid pagination responses.
+- Product, variant, price-list, and inventory-level pagination with conservative Shopify GraphQL page sizes.
+- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, non-EUR price-list configuration, invalid pagination responses, and Shopify throttle/retry conditions.
 
 ## CSV columns
+
+The feed intentionally splits Shopify work into smaller Admin GraphQL queries: publication products are fetched without variants, variants are fetched per product, and inventory levels are fetched per inventory item. Product and variant pages are capped at 25 records, product images are capped at 1 image, and inventory is never nested inside the product query. This avoids Shopify single-query cost failures such as `Query cost ... exceeds the single query max cost limit 1000`.
 
 The CSV includes these columns:
 
