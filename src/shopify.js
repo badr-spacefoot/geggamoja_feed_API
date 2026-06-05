@@ -2,7 +2,6 @@ const REQUIRED_SHOPIFY_ENV = [
   'SHOPIFY_SHOP_DOMAIN',
   'SHOPIFY_ADMIN_API_VERSION',
   'SHOPIFY_ADMIN_ACCESS_TOKEN',
-  'SHOPIFY_CATALOG_GID',
   'SHOPIFY_PUBLICATION_GID',
   'SHOPIFY_PRICE_LIST_GID'
 ];
@@ -12,6 +11,7 @@ const MIN_RETRY_DELAY_MS = 1000;
 
 export function validateShopifyEnv(env = process.env) {
   const missing = REQUIRED_SHOPIFY_ENV.filter((key) => !env[key]);
+  if (!env.SHOPIFY_CATALOG_GID && !env.SHOPIFY_CATALOG_ID) missing.push('SHOPIFY_CATALOG_GID or SHOPIFY_CATALOG_ID');
   if (missing.length > 0) {
     throw new Error(`Missing required Shopify environment variable(s): ${missing.join(', ')}`);
   }
@@ -21,11 +21,23 @@ export function validateShopifyEnv(env = process.env) {
     throw new Error('SHOPIFY_SHOP_DOMAIN must be a valid Shopify shop domain, for example example.myshopify.com.');
   }
 
-  for (const key of ['SHOPIFY_CATALOG_GID', 'SHOPIFY_PUBLICATION_GID', 'SHOPIFY_PRICE_LIST_GID']) {
+  if (env.SHOPIFY_CATALOG_ID && !/^\d+$/.test(env.SHOPIFY_CATALOG_ID.trim())) {
+    throw new Error('SHOPIFY_CATALOG_ID must contain only digits when provided.');
+  }
+
+  for (const key of ['SHOPIFY_PUBLICATION_GID', 'SHOPIFY_PRICE_LIST_GID']) {
     if (!env[key].startsWith('gid://shopify/')) {
       throw new Error(`${key} must be a Shopify GraphQL gid, for example gid://shopify/Publication/123.`);
     }
   }
+
+  if (env.SHOPIFY_CATALOG_GID && !env.SHOPIFY_CATALOG_GID.startsWith('gid://shopify/Catalog/')) {
+    throw new Error('SHOPIFY_CATALOG_GID must be a Shopify Catalog gid, for example gid://shopify/Catalog/123.');
+  }
+}
+
+export function getCatalogGid(env = process.env) {
+  return env.SHOPIFY_CATALOG_GID || `gid://shopify/Catalog/${env.SHOPIFY_CATALOG_ID}`;
 }
 
 export function createShopifyClient(env = process.env) {

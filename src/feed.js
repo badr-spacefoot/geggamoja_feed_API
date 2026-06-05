@@ -1,5 +1,5 @@
 import { stringify } from 'csv-stringify/sync';
-import { createShopifyClient } from './shopify.js';
+import { createShopifyClient, getCatalogGid } from './shopify.js';
 
 export const CSV_COLUMNS = [
   'brand',
@@ -37,7 +37,7 @@ const PRODUCTS_QUERY = `#graphql
   query CatalogPublicationProducts($publicationId: ID!, $after: String) {
     publication(id: $publicationId) {
       id
-      products(first: 50, after: $after) {
+      includedProducts(first: 50, after: $after) {
         pageInfo { hasNextPage endCursor }
         edges {
           cursor
@@ -200,10 +200,11 @@ export async function buildFeedRows(env = process.env, client = createShopifyCli
 }
 
 async function validateCatalogConfiguration(env, client) {
-  const data = await client.graphql(CATALOG_CHECK_QUERY, { catalogId: env.SHOPIFY_CATALOG_GID });
+  const catalogGid = getCatalogGid(env);
+  const data = await client.graphql(CATALOG_CHECK_QUERY, { catalogId: catalogGid });
   const catalog = data.catalog;
   if (!catalog) {
-    throw new Error(`Shopify catalog was not found: ${env.SHOPIFY_CATALOG_GID}`);
+    throw new Error(`Shopify catalog was not found: ${catalogGid}`);
   }
 
   if (catalog.publication?.id && catalog.publication.id !== env.SHOPIFY_PUBLICATION_GID) {
@@ -221,9 +222,9 @@ async function fetchPublicationProducts(publicationId, client) {
 
   do {
     const data = await client.graphql(PRODUCTS_QUERY, { publicationId, after });
-    const connection = data.publication?.products;
+    const connection = data.publication?.includedProducts;
     if (!connection) {
-      throw new Error(`Shopify publication was not found or has no products connection: ${publicationId}`);
+      throw new Error(`Shopify publication was not found or has no included products connection: ${publicationId}`);
     }
 
     for (const edge of connection.edges ?? []) {

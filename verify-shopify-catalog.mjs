@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { createShopifyClient, validateShopifyEnv } from './src/shopify.js';
+import { createShopifyClient, getCatalogGid, validateShopifyEnv } from './src/shopify.js';
 
 dotenv.config();
 
@@ -14,7 +14,7 @@ const QUERY = `#graphql
     }
     publication(id: $publicationId) {
       id
-      products(first: 1) {
+      includedProducts(first: 1) {
         nodes { id title handle }
       }
     }
@@ -29,7 +29,7 @@ try {
   validateShopifyEnv(process.env);
   const client = createShopifyClient(process.env);
   const data = await client.graphql(QUERY, {
-    catalogId: process.env.SHOPIFY_CATALOG_GID,
+    catalogId: getCatalogGid(process.env),
     publicationId: process.env.SHOPIFY_PUBLICATION_GID,
     priceListId: process.env.SHOPIFY_PRICE_LIST_GID
   });

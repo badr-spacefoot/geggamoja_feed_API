@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, '..', 'public');
 const port = Number(process.env.PORT ?? 3000);
+let latestFeed = null;
 
 function validateEnvironment() {
   requireAuthEnv(process.env);
@@ -53,15 +54,29 @@ app.get(['/', '/index.html'], requireLogin, (_req, res) => {
 app.get('/api/feed.csv', requireLogin, async (_req, res, next) => {
   try {
     const csv = await generateFeedCsv(process.env);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="geggamoja-b2b-catalog-${timestamp}.csv"`);
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(200).send(csv);
+    latestFeed = { csv, generatedAt: new Date() };
+    sendCsvDownload(res, csv, latestFeed.generatedAt);
   } catch (error) {
     next(error);
   }
 });
+
+
+app.get('/api/feed/latest.csv', requireLogin, (_req, res) => {
+  if (!latestFeed) {
+    res.status(404).type('text/plain').send('No CSV has been generated since this server started. Use Generate CSV first.');
+    return;
+  }
+  sendCsvDownload(res, latestFeed.csv, latestFeed.generatedAt);
+});
+
+function sendCsvDownload(res, csv, generatedAt) {
+  const timestamp = generatedAt.toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="geggamoja-b2b-catalog-${timestamp}.csv"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).send(csv);
+}
 
 app.use(express.static(publicDir, { index: false, extensions: false }));
 

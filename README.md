@@ -2,7 +2,7 @@
 
 Small internal Node.js/Express web app for generating a downloadable CSV feed for the Geggamoja Spacefoot / France EUR B2B Shopify catalog.
 
-The app uses Shopify Admin GraphQL API on the server, reads products from the configured catalog publication, resolves EUR prices from the configured price list, reads variant inventory levels, and returns one CSV row per variant with inventory quantities summed across inventory locations.
+The app uses Shopify Admin GraphQL API on the server, reads included products from the configured catalog publication, resolves EUR prices from the configured price list, reads variant inventory levels, and returns one CSV row per variant with inventory quantities summed across inventory locations.
 
 ## What it provides
 
@@ -44,19 +44,20 @@ SESSION_SECRET=replace-with-at-least-32-random-characters
 Required Shopify variables:
 
 ```env
-SHOPIFY_SHOP_DOMAIN=your-shop.myshopify.com
+SHOPIFY_SHOP_DOMAIN=geggamojab2b.myshopify.com
 SHOPIFY_ADMIN_API_VERSION=2025-10
-SHOPIFY_ADMIN_ACCESS_TOKEN=shpat_replace_me
-SHOPIFY_CATALOG_GID=gid://shopify/CompanyLocationCatalog/1234567890
-SHOPIFY_PUBLICATION_GID=gid://shopify/Publication/1234567890
-SHOPIFY_PRICE_LIST_GID=gid://shopify/PriceList/1234567890
+SHOPIFY_ADMIN_ACCESS_TOKEN=replace-with-shopify-admin-access-token
+SHOPIFY_CATALOG_ID=88934580363
+SHOPIFY_CATALOG_GID=gid://shopify/Catalog/88934580363
+SHOPIFY_PUBLICATION_GID=gid://shopify/Publication/186172997771
+SHOPIFY_PRICE_LIST_GID=gid://shopify/PriceList/26895024267
 ```
 
 Notes:
 
 - Use a Shopify Admin API access token with the minimum scopes required to read products, publications/catalogs, price lists, and inventory.
 - `SHOPIFY_ADMIN_ACCESS_TOKEN` is only read by server-side code. Do not put it in frontend JavaScript, static HTML, or client-side build variables.
-- Use the Spacefoot / France EUR catalog IDs, not the full shop catalog.
+- Use the Spacefoot / France EUR catalog IDs shown above, not the full shop catalog. `SHOPIFY_CATALOG_ID` is optional when `SHOPIFY_CATALOG_GID` is present, but keeping both is useful for human cross-checking.
 
 ## Run locally
 
@@ -78,7 +79,7 @@ For development with Node's watch mode:
 npm run dev
 ```
 
-Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to download the live feed from `/api/feed.csv`.
+Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to download the live feed from `/api/feed.csv`; this also keeps an in-memory copy available at `/api/feed/latest.csv` until the server restarts.
 
 You can also verify the Shopify catalog configuration without starting the web app:
 
