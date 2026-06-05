@@ -10,10 +10,12 @@ No Express server, always-on backend, or local machine is required after setup.
   - manually with `workflow_dispatch`
   - automatically every day at **06:00 UTC**
 - Shopify credentials loaded only from GitHub Actions secrets.
-- Static GitHub Pages site showing:
+- Static GitHub Pages supplier dashboard showing:
   - last generation date
-  - number of products
-  - number of CSV rows
+  - number of products and variants
+  - stock and data-quality KPIs
+  - Chart.js visualizations
+  - searchable/filterable variant tables
   - a **Download CSV** button
 - Shopify Admin GraphQL feed generation with conservative page sizes to avoid Shopify query cost failures.
 - CSV output with one row per variant and the same column set used by the prior app.
@@ -23,7 +25,7 @@ No Express server, always-on backend, or local machine is required after setup.
 The workflow deploys these files to GitHub Pages:
 
 ```text
-index.html       # Static status/download page
+index.html       # Static supplier dashboard
 feed.csv         # Generated catalog feed
 feed-meta.json   # Last generation timestamp, product count, row count
 ```
@@ -44,17 +46,21 @@ image_url, product_url, tags, updated_at
 
 ### 1. Add GitHub Actions secrets
 
-In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret** and add:
+In the GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret** and add the following **secret names** one by one.
 
-```env
-SHOPIFY_SHOP_DOMAIN=geggamojab2b.myshopify.com
-SHOPIFY_ADMIN_API_VERSION=2025-10
-SHOPIFY_ADMIN_ACCESS_TOKEN=replace-with-shopify-admin-access-token
-SHOPIFY_CATALOG_ID=88934580363
-SHOPIFY_CATALOG_GID=gid://shopify/Catalog/88934580363
-SHOPIFY_PUBLICATION_GID=gid://shopify/Publication/186172997771
-SHOPIFY_PRICE_LIST_GID=gid://shopify/PriceList/26895024267
-```
+Only `SHOPIFY_ADMIN_ACCESS_TOKEN` is a true private credential. The shop/catalog IDs are not passwords, but the workflow still reads them from GitHub Secrets so all runtime configuration is managed in one GitHub screen and nothing needs to be edited in the workflow file.
+
+| GitHub secret name | Value to enter | Is it sensitive? |
+| --- | --- | --- |
+| `SHOPIFY_ADMIN_ACCESS_TOKEN` | example-token-do-not-commit-real-value | **Yes — private credential** |
+| `SHOPIFY_SHOP_DOMAIN` | `example-shop.myshopify.com` | No — shop identifier |
+| `SHOPIFY_ADMIN_API_VERSION` | `2025-10` | No — API version |
+| `SHOPIFY_CATALOG_ID` | `1234567890` | No — catalog identifier |
+| `SHOPIFY_CATALOG_GID` | `gid://shopify/Catalog/1234567890` | No — catalog identifier |
+| `SHOPIFY_PUBLICATION_GID` | `gid://shopify/Publication/2345678901` | No — publication identifier |
+| `SHOPIFY_PRICE_LIST_GID` | `gid://shopify/PriceList/3456789012` | No — price-list identifier |
+
+The `.env.example` file is only a template for optional local testing. It shows the variable names and safe configuration values, but it does **not** contain the real Shopify Admin token. Never commit a real `.env` file.
 
 `SHOPIFY_ADMIN_ACCESS_TOKEN` must only be stored as a GitHub secret. It is never written to `public/`, `feed.csv`, `feed-meta.json`, or frontend JavaScript.
 
@@ -105,7 +111,7 @@ public/feed-meta.json
 
 ## Why this no longer needs a server
 
-GitHub Actions is the trusted backend. It receives the Shopify Admin credentials from GitHub Secrets, generates static output files, and publishes only safe files to GitHub Pages. GitHub Pages then serves static HTML/JSON/CSV only, so there is no server process to host, monitor, or restart.
+GitHub Actions is the trusted backend. It receives the Shopify Admin credentials from GitHub Secrets, generates static output files, and publishes only safe files to GitHub Pages. GitHub Pages then serves static HTML/JSON/CSV only, and the browser dashboard parses `feed.csv` locally with PapaParse and renders charts with Chart.js, so there is no server process to host, monitor, or restart.
 
 ## Security notes
 
