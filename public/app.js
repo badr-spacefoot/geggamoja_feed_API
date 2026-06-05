@@ -1,4 +1,4 @@
-const DASHBOARD_VERSION = '2026-06-05-ean-sort-movements';
+const DASHBOARD_VERSION = '2026-06-06-theme-grouped-products';
 const ACTIONS_WORKFLOW_RUNS_URL = 'https://api.github.com/repos/badr-spacefoot/geggamoja_feed_API/actions/workflows/generate-feed.yml/runs?branch=main&per_page=1';
 const REQUIRED_FIELDS = ['variant_sku', 'barcode', 'price_amount', 'image_url', 'product_type'];
 const EURO = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR' });
@@ -6,16 +6,19 @@ const INT = new Intl.NumberFormat('en-US');
 const state = {
   rows: [],
   filteredRows: [],
+  groupedRows: [],
+  expandedProducts: new Set(),
   history: [],
   changes: null,
   charts: {},
   sort: { key: 'stock', direction: 'desc' },
-  pageSize: 100
+  pageSize: 100,
+  groupProducts: false
 };
 let feedStatusTimer = null;
 
 const el = (id) => document.getElementById(id);
-const text = (id, value) => { el(id).textContent = value; };
+const text = (id, value) => { const node = el(id); if (node) node.textContent = value; };
 const clean = (value) => String(value ?? '').trim();
 const isPresent = (value) => clean(value) !== '';
 const toNumber = (value) => {
@@ -27,40 +30,48 @@ const productKey = (row) => clean(row.product_id) || clean(row.product_handle) |
 const typeName = (row) => clean(row.product_type) || 'Unclassified';
 
 window.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   bindFilters();
   bindSorting();
+  bindGroupedRows();
   el('refreshButton').addEventListener('click', loadDashboard);
   loadDashboard();
   updateFeedGenerationStatus();
 });
 
+function initTheme() {
+  const saved = localStorage.getItem('dashboard-theme') || 'light';
+  setTheme(saved === 'dark' ? 'dark' : 'light');
+  el('themeToggle').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+}
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem('dashboard-theme', theme);
+  text('themeToggle', theme === 'dark' ? 'Light mode' : 'Dark mode');
+}
+
 async function updateFeedGenerationStatus() {
   try {
     const response = await fetch(`${ACTIONS_WORKFLOW_RUNS_URL}&ts=${Date.now()}`, { headers: { Accept: 'application/vnd.github+json' } });
     if (!response.ok) throw new Error(`GitHub Actions returned ${response.status}`);
-    const payload = await response.json();
-    const run = payload.workflow_runs?.[0];
-
+    const run = (await response.json()).workflow_runs?.[0];
     if (!run) {
       setFeedStatus('Feed status unavailable', 'No workflow run found yet.', 'pending');
       scheduleFeedStatusRefresh(120000);
       return;
     }
-
     if (isActiveRun(run)) {
       const activeStep = await getCurrentWorkflowStep(run.jobs_url);
-      const detail = activeStep ? `Current step: ${activeStep}` : `Started: ${formatDateTime(run.run_started_at || run.created_at)}`;
-      setFeedStatus('Feed generation in progress', detail, 'running');
+      setFeedStatus('Feed generation in progress', activeStep ? `Current step: ${activeStep}` : `Started: ${formatDateTime(run.run_started_at || run.created_at)}`, 'running');
       scheduleFeedStatusRefresh(30000);
       return;
     }
-
     if (run.conclusion === 'success') {
       setFeedStatus('Feed ready', `Last workflow success: ${formatDateTime(run.updated_at)}`, 'success');
       scheduleFeedStatusRefresh(120000);
       return;
     }
-
     setFeedStatus('Last generation needs attention', `${describeConclusion(run.conclusion)}: ${formatDateTime(run.updated_at)}`, 'error');
     scheduleFeedStatusRefresh(120000);
   } catch (error) {
@@ -74,8 +85,7 @@ async function getCurrentWorkflowStep(jobsUrl) {
   try {
     const response = await fetch(`${jobsUrl}${jobsUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`, { headers: { Accept: 'application/vnd.github+json' } });
     if (!response.ok) return '';
-    const payload = await response.json();
-    const job = payload.jobs?.find((item) => item.status === 'in_progress') || payload.jobs?.[0];
+    const job = (await response.json()).jobs?.find((item) => item.status === 'in_progress');
     const step = job?.steps?.find((item) => item.status === 'in_progress') || job?.steps?.find((item) => item.status === 'queued' || item.status === 'pending');
     return step?.name || job?.name || '';
   } catch (_error) {
@@ -110,17 +120,11 @@ async function loadDashboard() {
     ensureLibraries();
     const [metadata, csvText, history, changes] = await Promise.all([loadMetadata(), loadCsvText(), loadHistory(), loadChanges()]);
     const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: 'greedy' });
-    if (parsed.errors?.length) {
-      throw new Error(`CSV parsing failed: ${parsed.errors[0].message}`);
-    }
-
+    if (parsed.errors?.length) throw new Error(`CSV parsing failed: ${parsed.errors[0].message}`);
     state.rows = parsed.data.map(normalizeRow).filter((row) => variantKey(row));
     state.history = history;
     state.changes = changes;
-    if (state.rows.length === 0) {
-      throw new Error('feed.csv was loaded, but it did not contain any variants.');
-    }
-
+    if (state.rows.length === 0) throw new Error('feed.csv was loaded, but it did not contain any variants.');
     renderDashboard(metadata);
   } catch (error) {
     renderEmptyState();
@@ -136,8 +140,7 @@ function ensureLibraries() {
 async function loadMetadata() {
   try {
     const response = await fetch(`feed-meta.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
-    if (!response.ok) return null;
-    return response.json();
+    return response.ok ? response.json() : null;
   } catch (_error) {
     return null;
   }
@@ -146,8 +149,7 @@ async function loadMetadata() {
 async function loadHistory() {
   try {
     const response = await fetch(`feed-history.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
-    if (!response.ok) return [];
-    const payload = await response.json();
+    const payload = response.ok ? await response.json() : null;
     return Array.isArray(payload?.snapshots) ? payload.snapshots : [];
   } catch (_error) {
     return [];
@@ -157,8 +159,7 @@ async function loadHistory() {
 async function loadChanges() {
   try {
     const response = await fetch(`feed-changes.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
-    if (!response.ok) return null;
-    return response.json();
+    return response.ok ? response.json() : null;
   } catch (_error) {
     return null;
   }
@@ -166,9 +167,7 @@ async function loadChanges() {
 
 async function loadCsvText() {
   const response = await fetch(`feed.csv?ts=${Date.now()}`, { headers: { Accept: 'text/csv' } });
-  if (!response.ok) {
-    throw new Error('feed.csv is not available yet. Run the GitHub Actions workflow first.');
-  }
+  if (!response.ok) throw new Error('feed.csv is not available yet. Run the GitHub Actions workflow first.');
   return response.text();
 }
 
@@ -195,17 +194,15 @@ function renderDashboard(metadata) {
   text('variantsWithStock', INT.format(stats.variantsWithStock));
   text('badEans', INT.format(stats.badEans));
   text('qualityScore', `${stats.qualityScore}%`);
-
   text('missingBarcode', INT.format(stats.missing.barcode));
   text('badEansDetail', INT.format(stats.badEans));
   text('missingImage', INT.format(stats.missing.image_url));
   text('missingPrice', INT.format(stats.missing.price_amount));
   text('missingStock', INT.format(stats.missingStock));
+  text('outOfStockDetail', INT.format(stats.variantsOutOfStock));
   text('missingProductType', INT.format(stats.missing.product_type));
-
   const lastGenerated = metadata?.generatedAt ? new Date(metadata.generatedAt) : stats.lastUpdated;
   text('lastUpdated', lastGenerated ? `Last CSV update: ${lastGenerated.toLocaleString()}` : 'Last CSV update: unavailable');
-
   renderCharts(stats);
   renderHistory(stats, metadata);
   renderChanges();
@@ -231,23 +228,7 @@ function calculateStats(rows) {
   const qualityScore = totalRequiredFields ? Math.round(((validRequiredFields + validEans) / totalRequiredFields) * 100) : 0;
   const missingStock = variants.filter((row) => !isPresent(row.inventory_available)).length;
   const lastUpdated = variants.map((row) => row.updatedDate).filter(Boolean).sort((a, b) => b - a)[0] ?? null;
-
-  return {
-    totalProducts: products.size,
-    totalVariants: variants.length,
-    activeVariants,
-    draftVariants,
-    totalStock,
-    variantsWithStock,
-    variantsOutOfStock,
-    missing,
-    missingStock,
-    badEans,
-    qualityScore,
-    productTypes: groupProductTypes(variants),
-    priceBuckets: buildPriceBuckets(variants),
-    lastUpdated
-  };
+  return { totalProducts: products.size, totalVariants: variants.length, activeVariants, draftVariants, totalStock, variantsWithStock, variantsOutOfStock, missing, missingStock, badEans, qualityScore, productTypes: groupProductTypes(variants), priceBuckets: buildPriceBuckets(variants), lastUpdated };
 }
 
 function uniqueRows(rows, keyFn) {
@@ -267,58 +248,26 @@ function groupProductTypes(rows) {
     const entry = groups.get(key) ?? { type: key, variants: 0, stock: 0, priceSum: 0, priced: 0 };
     entry.variants += 1;
     entry.stock += row.stock;
-    if (row.price > 0) {
-      entry.priceSum += row.price;
-      entry.priced += 1;
-    }
+    if (row.price > 0) { entry.priceSum += row.price; entry.priced += 1; }
     groups.set(key, entry);
   }
-  return [...groups.values()]
-    .map((entry) => ({ ...entry, averagePrice: entry.priced ? entry.priceSum / entry.priced : 0 }))
-    .sort((a, b) => b.variants - a.variants || b.stock - a.stock);
+  return [...groups.values()].map((entry) => ({ ...entry, averagePrice: entry.priced ? entry.priceSum / entry.priced : 0 })).sort((a, b) => b.variants - a.variants || b.stock - a.stock);
 }
 
 function buildPriceBuckets(rows) {
-  const buckets = [
-    { label: '0-10', min: 0, max: 10, count: 0 },
-    { label: '10-25', min: 10, max: 25, count: 0 },
-    { label: '25-50', min: 25, max: 50, count: 0 },
-    { label: '50-100', min: 50, max: 100, count: 0 },
-    { label: '100+', min: 100, max: Infinity, count: 0 }
-  ];
-  for (const row of rows.filter((item) => item.price > 0)) {
-    buckets.find((bucket) => row.price >= bucket.min && row.price < bucket.max).count += 1;
-  }
+  const buckets = [{ label: '0-10', min: 0, max: 10, count: 0 }, { label: '10-25', min: 10, max: 25, count: 0 }, { label: '25-50', min: 25, max: 50, count: 0 }, { label: '50-100', min: 50, max: 100, count: 0 }, { label: '100+', min: 100, max: Infinity, count: 0 }];
+  for (const row of rows.filter((item) => item.price > 0)) buckets.find((bucket) => row.price >= bucket.min && row.price < bucket.max).count += 1;
   return buckets;
 }
 
 function renderCharts(stats) {
   destroyCharts(['status', 'stock', 'prices', 'missing']);
   const colors = ['#145a4a', '#e0a72e', '#5b8def', '#d95f59', '#7c3aed', '#0891b2', '#65a30d', '#f97316'];
-  state.charts.status = new Chart(el('statusChart'), {
-    type: 'doughnut',
-    data: { labels: ['Active', 'Draft', 'Other'], datasets: [{ data: [stats.activeVariants, stats.draftVariants, Math.max(0, stats.totalVariants - stats.activeVariants - stats.draftVariants)], backgroundColor: ['#145a4a', '#e0a72e', '#cbd5e1'], borderWidth: 0 }] },
-    options: chartOptions()
-  });
-
+  state.charts.status = new Chart(el('statusChart'), { type: 'doughnut', data: { labels: ['Active', 'Draft', 'Other'], datasets: [{ data: [stats.activeVariants, stats.draftVariants, Math.max(0, stats.totalVariants - stats.activeVariants - stats.draftVariants)], backgroundColor: ['#145a4a', '#e0a72e', '#cbd5e1'], borderWidth: 0 }] }, options: chartOptions() });
   const topStockTypes = stats.productTypes.slice(0, 8);
-  state.charts.stock = new Chart(el('stockTypeChart'), {
-    type: 'bar',
-    data: { labels: topStockTypes.map((item) => item.type), datasets: [{ label: 'Available stock', data: topStockTypes.map((item) => item.stock), backgroundColor: colors }] },
-    options: chartOptions({ indexAxis: 'y' })
-  });
-
-  state.charts.prices = new Chart(el('priceChart'), {
-    type: 'bar',
-    data: { labels: stats.priceBuckets.map((bucket) => bucket.label), datasets: [{ label: 'Variants', data: stats.priceBuckets.map((bucket) => bucket.count), backgroundColor: '#5b8def' }] },
-    options: chartOptions()
-  });
-
-  state.charts.missing = new Chart(el('missingChart'), {
-    type: 'bar',
-    data: { labels: ['Missing barcode', 'Bad EAN', 'Missing image', 'Missing price', 'Missing product type'], datasets: [{ label: 'Variants', data: [stats.missing.barcode, stats.badEans, stats.missing.image_url, stats.missing.price_amount, stats.missing.product_type], backgroundColor: '#d95f59' }] },
-    options: chartOptions()
-  });
+  state.charts.stock = new Chart(el('stockTypeChart'), { type: 'bar', data: { labels: topStockTypes.map((item) => item.type), datasets: [{ label: 'Available stock', data: topStockTypes.map((item) => item.stock), backgroundColor: colors }] }, options: chartOptions({ indexAxis: 'y' }) });
+  state.charts.prices = new Chart(el('priceChart'), { type: 'bar', data: { labels: stats.priceBuckets.map((bucket) => bucket.label), datasets: [{ label: 'Variants', data: stats.priceBuckets.map((bucket) => bucket.count), backgroundColor: '#5b8def' }] }, options: chartOptions() });
+  state.charts.missing = new Chart(el('missingChart'), { type: 'bar', data: { labels: ['Missing barcode', 'Bad EAN', 'Missing image', 'Missing price', 'Missing stock value', 'Missing product type'], datasets: [{ label: 'Variants', data: [stats.missing.barcode, stats.badEans, stats.missing.image_url, stats.missing.price_amount, stats.missingStock, stats.missing.product_type], backgroundColor: '#d95f59' }] }, options: chartOptions() });
 }
 
 function renderHistory(stats, metadata) {
@@ -326,30 +275,16 @@ function renderHistory(stats, metadata) {
   const snapshots = normalizeHistory([...state.history, currentSnapshot]);
   const latest = snapshots.at(-1);
   const previous = snapshots.length > 1 ? snapshots.at(-2) : null;
-
   text('deltaProducts', formatDelta(latest?.productCount, previous?.productCount));
   text('deltaVariants', formatDelta(latest?.variantCount, previous?.variantCount));
   text('deltaStock', formatDelta(latest?.totalStock, previous?.totalStock));
   text('deltaQuality', formatDelta(latest?.qualityScore, previous?.qualityScore, '%'));
-
   renderHistoryChart(snapshots);
   renderHistoryTable(snapshots);
 }
 
 function buildCurrentSnapshot(stats, metadata) {
-  return {
-    generatedAt: metadata?.generatedAt || new Date().toISOString(),
-    productCount: stats.totalProducts,
-    variantCount: stats.totalVariants,
-    activeVariants: stats.activeVariants,
-    draftVariants: stats.draftVariants,
-    totalStock: stats.totalStock,
-    variantsWithStock: stats.variantsWithStock,
-    variantsOutOfStock: stats.variantsOutOfStock,
-    qualityScore: stats.qualityScore,
-    badEans: stats.badEans,
-    rowCount: metadata?.rowCount ?? stats.totalVariants
-  };
+  return { generatedAt: metadata?.generatedAt || new Date().toISOString(), productCount: stats.totalProducts, variantCount: stats.totalVariants, activeVariants: stats.activeVariants, draftVariants: stats.draftVariants, totalStock: stats.totalStock, variantsWithStock: stats.variantsWithStock, variantsOutOfStock: stats.variantsOutOfStock, qualityScore: stats.qualityScore, badEans: stats.badEans, rowCount: metadata?.rowCount ?? stats.totalVariants };
 }
 
 function normalizeHistory(snapshots) {
@@ -358,107 +293,45 @@ function normalizeHistory(snapshots) {
     if (!snapshot?.generatedAt) continue;
     const date = new Date(snapshot.generatedAt);
     if (Number.isNaN(date.valueOf())) continue;
-    const dayKey = date.toISOString().slice(0, 10);
-    byDate.set(dayKey, {
-      generatedAt: date.toISOString(),
-      productCount: toNumber(snapshot.productCount),
-      variantCount: toNumber(snapshot.variantCount ?? snapshot.rowCount),
-      totalStock: toNumber(snapshot.totalStock),
-      qualityScore: toNumber(snapshot.qualityScore),
-      badEans: toNumber(snapshot.badEans),
-      rowCount: toNumber(snapshot.rowCount)
-    });
+    byDate.set(date.toISOString().slice(0, 10), { generatedAt: date.toISOString(), productCount: toNumber(snapshot.productCount), variantCount: toNumber(snapshot.variantCount ?? snapshot.rowCount), totalStock: toNumber(snapshot.totalStock), qualityScore: toNumber(snapshot.qualityScore), badEans: toNumber(snapshot.badEans), rowCount: toNumber(snapshot.rowCount) });
   }
   return [...byDate.values()].sort((a, b) => new Date(a.generatedAt) - new Date(b.generatedAt)).slice(-60);
 }
 
 function renderHistoryChart(snapshots) {
   destroyCharts(['history']);
-  if (snapshots.length === 0) {
-    el('historyBody').innerHTML = '<tr><td colspan="5">No history available yet.</td></tr>';
-    return;
-  }
-
-  state.charts.history = new Chart(el('historyChart'), {
-    type: 'line',
-    data: {
-      labels: snapshots.map((snapshot) => shortDate(snapshot.generatedAt)),
-      datasets: [
-        { label: 'Variants', data: snapshots.map((snapshot) => snapshot.variantCount), borderColor: '#5b8def', backgroundColor: '#5b8def', tension: 0.3, yAxisID: 'y' },
-        { label: 'Stock', data: snapshots.map((snapshot) => snapshot.totalStock), borderColor: '#145a4a', backgroundColor: '#145a4a', tension: 0.3, yAxisID: 'y' },
-        { label: 'Quality %', data: snapshots.map((snapshot) => snapshot.qualityScore), borderColor: '#e0a72e', backgroundColor: '#e0a72e', tension: 0.3, yAxisID: 'quality' }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { intersect: false, mode: 'index' },
-      plugins: { legend: { position: 'bottom' } },
-      scales: {
-        y: { beginAtZero: true, ticks: { precision: 0 } },
-        quality: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: (value) => `${value}%` } }
-      }
-    }
-  });
+  if (snapshots.length === 0) { el('historyBody').innerHTML = '<tr><td colspan="5">No history available yet.</td></tr>'; return; }
+  state.charts.history = new Chart(el('historyChart'), { type: 'line', data: { labels: snapshots.map((snapshot) => shortDate(snapshot.generatedAt)), datasets: [{ label: 'Variants', data: snapshots.map((snapshot) => snapshot.variantCount), borderColor: '#5b8def', backgroundColor: '#5b8def', tension: 0.3, yAxisID: 'y' }, { label: 'Stock', data: snapshots.map((snapshot) => snapshot.totalStock), borderColor: '#145a4a', backgroundColor: '#145a4a', tension: 0.3, yAxisID: 'y' }, { label: 'Quality %', data: snapshots.map((snapshot) => snapshot.qualityScore), borderColor: '#e0a72e', backgroundColor: '#e0a72e', tension: 0.3, yAxisID: 'quality' }] }, options: { responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: 'index' }, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } }, quality: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: (value) => `${value}%` } } } } });
 }
 
 function renderHistoryTable(snapshots) {
-  const rows = snapshots.slice(-10).reverse().map((snapshot) => `
-    <tr>
-      <td>${shortDate(snapshot.generatedAt)}</td>
-      <td>${INT.format(snapshot.productCount)}</td>
-      <td>${INT.format(snapshot.variantCount)}</td>
-      <td>${INT.format(snapshot.totalStock)}</td>
-      <td>${INT.format(snapshot.qualityScore)}%</td>
-    </tr>
-  `).join('');
+  const rows = snapshots.slice(-10).reverse().map((snapshot) => `<tr><td>${shortDate(snapshot.generatedAt)}</td><td>${INT.format(snapshot.productCount)}</td><td>${INT.format(snapshot.variantCount)}</td><td>${INT.format(snapshot.totalStock)}</td><td>${INT.format(snapshot.qualityScore)}%</td></tr>`).join('');
   el('historyBody').innerHTML = rows || '<tr><td colspan="5">No history available yet.</td></tr>';
 }
 
 function renderChanges() {
-  const changes = state.changes;
-  const newProducts = Array.isArray(changes?.newProducts) ? changes.newProducts : [];
-  const stockDrops = Array.isArray(changes?.stockDrops) ? changes.stockDrops : [];
-
-  el('newProductsBody').innerHTML = newProducts.slice(0, 12).map((item) => `
-    <tr><td>${escapeHtml(item.title || item.handle || '-')}</td><td>${escapeHtml(item.productType || '-')}</td><td>${INT.format(item.variantCount || 0)}</td><td>${INT.format(item.stock || 0)}</td></tr>
-  `).join('') || '<tr><td colspan="4">No newly added products detected yet.</td></tr>';
-
-  el('stockMoversBody').innerHTML = stockDrops.slice(0, 12).map((item) => `
-    <tr><td>${escapeHtml(item.title || item.handle || '-')}</td><td>${INT.format(item.previousStock || 0)}</td><td>${INT.format(item.currentStock || 0)}</td><td><span class="badge stock-out">${INT.format(item.delta || 0)}</span></td></tr>
-  `).join('') || '<tr><td colspan="4">No stock decreases detected yet.</td></tr>';
+  const newProducts = Array.isArray(state.changes?.newProducts) ? state.changes.newProducts : [];
+  const stockDrops = Array.isArray(state.changes?.stockDrops) ? state.changes.stockDrops : [];
+  el('newProductsBody').innerHTML = newProducts.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${escapeHtml(item.productType || '-')}</td><td>${INT.format(item.variantCount || 0)}</td><td>${INT.format(item.stock || 0)}</td></tr>`).join('') || '<tr><td colspan="4">No newly added products detected yet.</td></tr>';
+  el('stockMoversBody').innerHTML = stockDrops.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${INT.format(item.previousStock || 0)}</td><td>${INT.format(item.currentStock || 0)}</td><td><span class="badge stock-out">${INT.format(item.delta || 0)}</span></td></tr>`).join('') || '<tr><td colspan="4">No stock decreases detected yet.</td></tr>';
 }
 
-function chartOptions(extra = {}) {
-  return { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: extra.indexAxis ? undefined : { y: { beginAtZero: true, ticks: { precision: 0 } } }, ...extra };
-}
-
-function destroyCharts(keys = Object.keys(state.charts)) {
-  keys.forEach((key) => {
-    state.charts[key]?.destroy();
-    delete state.charts[key];
-  });
-}
+function chartOptions(extra = {}) { return { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: extra.indexAxis ? undefined : { y: { beginAtZero: true, ticks: { precision: 0 } } }, ...extra }; }
+function destroyCharts(keys = Object.keys(state.charts)) { keys.forEach((key) => { state.charts[key]?.destroy(); delete state.charts[key]; }); }
 
 function renderProductTypes(productTypes) {
-  const rows = productTypes.slice(0, 12).map((item) => `
-    <tr><td>${escapeHtml(item.type)}</td><td>${INT.format(item.variants)}</td><td>${INT.format(item.stock)}</td><td>${item.averagePrice ? EURO.format(item.averagePrice) : '-'}</td></tr>
-  `).join('');
+  const rows = productTypes.slice(0, 12).map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${INT.format(item.variants)}</td><td>${INT.format(item.stock)}</td><td>${item.averagePrice ? EURO.format(item.averagePrice) : '-'}</td></tr>`).join('');
   el('productTypesBody').innerHTML = rows || '<tr><td colspan="4">No product types found.</td></tr>';
 }
 
 function renderRecentUpdates(rows) {
   const recent = uniqueRows(rows, variantKey).filter((row) => row.updatedDate).sort((a, b) => b.updatedDate - a.updatedDate).slice(0, 10);
-  el('recentUpdatesBody').innerHTML = recent.map((row) => `
-    <tr><td>${row.updatedDate.toLocaleString()}</td><td>${escapeHtml(row.variant_sku || '-')}</td><td>${escapeHtml(row.product_title || '-')}</td><td>${INT.format(row.stock)}</td></tr>
-  `).join('') || '<tr><td colspan="4">No update dates found.</td></tr>';
+  el('recentUpdatesBody').innerHTML = recent.map((row) => `<tr><td>${row.updatedDate.toLocaleString()}</td><td>${escapeHtml(row.variant_sku || '-')}</td><td>${renderProductLink(row.product_title || '-', row.product_url)}</td><td>${INT.format(row.stock)}</td></tr>`).join('') || '<tr><td colspan="4">No update dates found.</td></tr>';
 }
 
 function populateFilters(rows) {
-  const statuses = [...new Set(rows.map((row) => row.status).filter(Boolean))].sort();
-  const types = [...new Set(rows.map((row) => row.productType).filter(Boolean))].sort();
-  setOptions(el('statusFilter'), statuses, 'All statuses');
-  setOptions(el('typeFilter'), types, 'All product types');
+  setOptions(el('statusFilter'), [...new Set(rows.map((row) => row.status).filter(Boolean))].sort(), 'All statuses');
+  setOptions(el('typeFilter'), [...new Set(rows.map((row) => row.productType).filter(Boolean))].sort(), 'All product types');
 }
 
 function setOptions(select, options, firstLabel) {
@@ -469,11 +342,8 @@ function setOptions(select, options, firstLabel) {
 
 function bindFilters() {
   ['searchInput', 'statusFilter', 'stockFilter', 'typeFilter', 'eanFilter'].forEach((id) => el(id).addEventListener('input', applyFilters));
-  el('pageSizeSelect').addEventListener('input', () => {
-    const value = el('pageSizeSelect').value;
-    state.pageSize = value === 'all' ? Infinity : toNumber(value);
-    renderVariantTable();
-  });
+  el('pageSizeSelect').addEventListener('input', () => { const value = el('pageSizeSelect').value; state.pageSize = value === 'all' ? Infinity : toNumber(value); renderCatalogueTable(); });
+  el('groupProductsToggle').addEventListener('change', (event) => { state.groupProducts = event.target.checked; state.expandedProducts.clear(); applyFilters(); });
 }
 
 function bindSorting() {
@@ -487,6 +357,17 @@ function bindSorting() {
   });
 }
 
+function bindGroupedRows() {
+  el('variantsBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-expand-product]');
+    if (!button) return;
+    const key = button.dataset.expandProduct;
+    if (state.expandedProducts.has(key)) state.expandedProducts.delete(key);
+    else state.expandedProducts.add(key);
+    renderCatalogueTable();
+  });
+}
+
 function applyFilters() {
   const search = clean(el('searchInput').value).toLowerCase();
   const status = el('statusFilter').value;
@@ -494,16 +375,52 @@ function applyFilters() {
   const type = el('typeFilter').value;
   const ean = el('eanFilter').value;
   const variants = uniqueRows(state.rows, variantKey);
-  state.filteredRows = sortRows(variants.filter((row) => {
+  state.filteredRows = variants.filter((row) => {
     const matchesSearch = !search || [row.variant_sku, row.product_title, row.barcode, row.productType].some((value) => clean(value).toLowerCase().includes(search));
     const matchesStatus = !status || row.status === status;
     const matchesStock = !stock || (stock === 'in' ? row.stock > 0 : row.stock <= 0);
     const matchesType = !type || row.productType === type;
     const matchesEan = !ean || row.eanStatus === ean;
     return matchesSearch && matchesStatus && matchesStock && matchesType && matchesEan;
-  }));
-  renderVariantTable();
+  });
+  state.groupedRows = buildProductGroups(state.filteredRows);
+  renderCatalogueTable();
   updateSortButtons();
+}
+
+function renderCatalogueTable() {
+  if (state.groupProducts) renderGroupedProductTable();
+  else renderVariantTable();
+}
+
+function buildProductGroups(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = productKey(row) || variantKey(row);
+    const entry = groups.get(key) ?? { key, first: row, variants: [], stock: 0, priceMin: Infinity, priceMax: 0, badEans: 0 };
+    entry.variants.push(row);
+    entry.stock += row.stock;
+    if (row.price > 0) { entry.priceMin = Math.min(entry.priceMin, row.price); entry.priceMax = Math.max(entry.priceMax, row.price); }
+    if (row.eanStatus === 'bad') entry.badEans += 1;
+    groups.set(key, entry);
+  }
+  return sortProductGroups([...groups.values()]);
+}
+
+function sortProductGroups(groups) {
+  const { key, direction } = state.sort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...groups].sort((a, b) => compareSortValue(groupSortValue(a, key), groupSortValue(b, key)) * multiplier);
+}
+
+function groupSortValue(group, key) {
+  if (key === 'stock') return group.stock;
+  if (key === 'price') return group.priceMin === Infinity ? 0 : group.priceMin;
+  if (key === 'productType') return group.first.productType;
+  if (key === 'status') return group.first.status;
+  if (key === 'barcode') return group.badEans;
+  if (key === 'variant_sku') return group.variants.length;
+  return clean(group.first.product_title).toLowerCase();
 }
 
 function sortRows(rows) {
@@ -532,21 +449,36 @@ function updateSortButtons() {
 }
 
 function renderVariantTable() {
-  const limit = Number.isFinite(state.pageSize) ? state.pageSize : state.filteredRows.length;
-  const visible = state.filteredRows.slice(0, limit);
-  el('filterSummary').textContent = `Showing ${INT.format(visible.length)} of ${INT.format(state.filteredRows.length)} matching variants${state.filteredRows.length > visible.length ? ` (first ${INT.format(limit)} shown)` : ''}.`;
-  el('variantsBody').innerHTML = visible.map((row) => `
-    <tr>
-      <td>${renderThumbnail(row)}</td>
-      <td>${escapeHtml(row.variant_sku || '-')}</td>
-      <td>${renderBarcode(row)}</td>
-      <td class="product-cell"><strong>${escapeHtml(row.product_title || '-')}</strong><span>${escapeHtml(row.product_handle || '')}</span></td>
-      <td>${escapeHtml(row.productType)}</td>
-      <td><span class="badge ${row.status.toLowerCase()}">${escapeHtml(row.status)}</span></td>
-      <td>${row.price ? EURO.format(row.price) : '-'}</td>
-      <td><span class="badge ${row.stock > 0 ? 'stock-in' : 'stock-out'}">${INT.format(row.stock)}</span></td>
-    </tr>
-  `).join('') || '<tr><td colspan="8">No variants match the selected filters.</td></tr>';
+  const sortedRows = sortRows(state.filteredRows);
+  const limit = Number.isFinite(state.pageSize) ? state.pageSize : sortedRows.length;
+  const visible = sortedRows.slice(0, limit);
+  text('filterSummary', `Showing ${INT.format(visible.length)} of ${INT.format(sortedRows.length)} matching variants${sortedRows.length > visible.length ? ` (first ${INT.format(limit)} shown)` : ''}.`);
+  el('variantsBody').innerHTML = visible.map(renderVariantRow).join('') || '<tr><td colspan="8">No variants match the selected filters.</td></tr>';
+}
+
+function renderGroupedProductTable() {
+  const limit = Number.isFinite(state.pageSize) ? state.pageSize : state.groupedRows.length;
+  const visible = state.groupedRows.slice(0, limit);
+  text('filterSummary', `Showing ${INT.format(visible.length)} of ${INT.format(state.groupedRows.length)} matching products. Click a product row to see sizes and EANs.`);
+  el('variantsBody').innerHTML = visible.map(renderProductGroup).join('') || '<tr><td colspan="8">No products match the selected filters.</td></tr>';
+}
+
+function renderVariantRow(row) {
+  return `<tr><td>${renderThumbnail(row)}</td><td>${escapeHtml(row.variant_sku || '-')}</td><td>${renderBarcode(row)}</td><td class="product-cell"><strong>${renderProductLink(row.product_title || '-', row.product_url)}</strong><span>${escapeHtml(row.product_handle || '')}</span></td><td>${escapeHtml(row.productType)}</td><td><span class="badge ${row.status.toLowerCase()}">${escapeHtml(row.status)}</span></td><td>${row.price ? EURO.format(row.price) : '-'}</td><td><span class="badge ${row.stock > 0 ? 'stock-in' : 'stock-out'}">${INT.format(row.stock)}</span></td></tr>`;
+}
+
+function renderProductGroup(group) {
+  const expanded = state.expandedProducts.has(group.key);
+  const priceText = group.priceMin === Infinity ? '-' : group.priceMin === group.priceMax ? EURO.format(group.priceMin) : `${EURO.format(group.priceMin)} - ${EURO.format(group.priceMax)}`;
+  const childRows = expanded ? group.variants.map((row) => `<tr class="variant-detail-row"><td></td><td>${escapeHtml(row.variant_sku || '-')}</td><td>${renderBarcode(row)}</td><td>${escapeHtml([row.option1_value, row.option2_value, row.option3_value].filter(Boolean).join(' / ') || row.product_title || '-')}</td><td>${escapeHtml(row.productType)}</td><td><span class="badge ${row.status.toLowerCase()}">${escapeHtml(row.status)}</span></td><td>${row.price ? EURO.format(row.price) : '-'}</td><td><span class="badge ${row.stock > 0 ? 'stock-in' : 'stock-out'}">${INT.format(row.stock)}</span></td></tr>`).join('') : '';
+  return `<tr class="product-group-row"><td>${renderThumbnail(group.first)}</td><td><button class="expand-button" type="button" data-expand-product="${escapeAttribute(group.key)}">${expanded ? 'Hide' : 'Show'} ${INT.format(group.variants.length)}</button></td><td>${group.badEans ? `<span class="ean-pill ean-bad">${INT.format(group.badEans)} bad EAN</span>` : '<span class="ean-pill ean-valid">EAN OK</span>'}</td><td class="product-cell"><strong>${renderProductLink(group.first.product_title || '-', group.first.product_url)}</strong><span>${escapeHtml(group.first.product_handle || '')}</span></td><td>${escapeHtml(group.first.productType)}</td><td><span class="badge ${group.first.status.toLowerCase()}">${escapeHtml(group.first.status)}</span></td><td>${priceText}</td><td><span class="badge ${group.stock > 0 ? 'stock-in' : 'stock-out'}">${INT.format(group.stock)}</span></td></tr>${childRows}`;
+}
+
+function renderProductLink(label, url) {
+  const safeLabel = escapeHtml(label || '-');
+  const safeUrl = clean(url);
+  if (!safeUrl) return safeLabel;
+  return `<a class="product-link" href="${escapeAttribute(safeUrl)}" target="_blank" rel="noopener">${safeLabel}</a>`;
 }
 
 function renderBarcode(row) {
@@ -563,29 +495,18 @@ function renderThumbnail(row) {
   return `<a class="product-thumb" href="${escapeAttribute(src)}" target="_blank" rel="noopener"><img src="${escapeAttribute(src)}" alt="${title}" loading="lazy" onerror="this.closest('a').classList.add('empty'); this.remove();" /></a>`;
 }
 
-function getEanStatus(value) {
-  const barcode = normalizeBarcode(value);
-  if (!barcode) return 'missing';
-  return isValidEan(barcode) ? 'valid' : 'bad';
-}
-
-function normalizeBarcode(value) {
-  return clean(value).replace(/[\s-]/g, '');
-}
-
+function getEanStatus(value) { const barcode = normalizeBarcode(value); if (!barcode) return 'missing'; return isValidEan(barcode) ? 'valid' : 'bad'; }
+function normalizeBarcode(value) { return clean(value).replace(/[\s-]/g, ''); }
 function isValidEan(value) {
   if (!/^\d{8}$|^\d{13}$/.test(value)) return false;
   const digits = [...value].map(Number);
   const checkDigit = digits.pop();
-  const sum = digits.reduce((total, digit, index) => {
-    const weight = value.length === 13 ? (index % 2 === 0 ? 1 : 3) : (index % 2 === 0 ? 3 : 1);
-    return total + digit * weight;
-  }, 0);
+  const sum = digits.reduce((total, digit, index) => total + digit * (value.length === 13 ? (index % 2 === 0 ? 1 : 3) : (index % 2 === 0 ? 3 : 1)), 0);
   return (10 - (sum % 10)) % 10 === checkDigit;
 }
 
 function renderEmptyState() {
-  ['totalProducts', 'totalVariants', 'activeVariants', 'draftVariants', 'totalStock', 'variantsWithStock', 'badEans', 'qualityScore', 'missingBarcode', 'badEansDetail', 'missingImage', 'missingPrice', 'missingStock', 'missingProductType', 'deltaProducts', 'deltaVariants', 'deltaStock', 'deltaQuality'].forEach((id) => text(id, '-'));
+  ['totalProducts', 'totalVariants', 'activeVariants', 'draftVariants', 'totalStock', 'variantsWithStock', 'badEans', 'qualityScore', 'missingBarcode', 'badEansDetail', 'missingImage', 'missingPrice', 'missingStock', 'outOfStockDetail', 'missingProductType', 'deltaProducts', 'deltaVariants', 'deltaStock', 'deltaQuality'].forEach((id) => text(id, '-'));
   text('lastUpdated', 'Last CSV update: unavailable');
   el('productTypesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
   el('recentUpdatesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
@@ -596,35 +517,9 @@ function renderEmptyState() {
   destroyCharts();
 }
 
-function formatDelta(current, previous, suffix = '') {
-  if (current == null || previous == null) return '-';
-  const delta = current - previous;
-  const sign = delta > 0 ? '+' : '';
-  return `${sign}${INT.format(delta)}${suffix}`;
-}
-
-function shortDate(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return '-';
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function formatDateTime(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return 'unknown time';
-  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-function showAlert(message, visible) {
-  const alert = el('alert');
-  alert.textContent = message;
-  alert.hidden = !visible;
-}
-
-function escapeHtml(value) {
-  return clean(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
-}
-
-function escapeAttribute(value) {
-  return escapeHtml(value).replace(/`/g, '&#96;');
-}
+function formatDelta(current, previous, suffix = '') { if (current == null || previous == null) return '-'; const delta = current - previous; return `${delta > 0 ? '+' : ''}${INT.format(delta)}${suffix}`; }
+function shortDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '-' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+function formatDateTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? 'unknown time' : date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); }
+function showAlert(message, visible) { const alert = el('alert'); alert.textContent = message; alert.hidden = !visible; }
+function escapeHtml(value) { return clean(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
+function escapeAttribute(value) { return escapeHtml(value).replace(/`/g, '&#96;'); }
