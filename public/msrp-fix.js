@@ -1,4 +1,5 @@
 const MSRP_FIX_VERSION = '2026-06-06-msrp-zero-is-missing';
+const UI_POLISH_VERSION = '2026-06-06-header-footer-polish';
 const WORKFLOW_PAGE_URL = 'https://github.com/badr-spacefoot/geggamoja_feed_API/actions/workflows/generate-feed.yml';
 let workflowButtonTimer = null;
 
@@ -53,7 +54,9 @@ function renderProductGroup(group) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  addUiPolishStyles();
   addSafeWorkflowButton();
+  addDashboardFooter();
   refreshSafeWorkflowButton();
 });
 
@@ -67,6 +70,56 @@ function addSafeWorkflowButton() {
   button.textContent = 'Run workload';
   button.addEventListener('click', openWorkflowIfReady);
   actions.appendChild(button);
+}
+
+function addDashboardFooter() {
+  const shell = document.querySelector('.page-shell');
+  if (!shell || document.querySelector('.site-footer')) return;
+  const footer = document.createElement('footer');
+  footer.className = 'site-footer';
+  footer.innerHTML = `
+    <p class="footer-copy">&copy; ${new Date().getFullYear()} Badr Eddine BELGHARBI. All rights reserved.</p>
+    <nav class="footer-links" aria-label="Contact links">
+      <a href="https://www.linkedin.com/in/badreddinebelgharbi" target="_blank" rel="noopener" aria-label="LinkedIn profile">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4.98 3.5C4.98 4.88 3.86 6 2.5 6S0 4.88 0 3.5 1.12 1 2.5 1s2.48 1.12 2.48 2.5ZM.35 8.1h4.3V23H.35V8.1Zm7.15 0h4.12v2.03h.06c.57-1.08 1.98-2.22 4.07-2.22C20.1 7.91 21 10.78 21 14.5V23h-4.3v-7.54c0-1.8-.03-4.11-2.5-4.11-2.51 0-2.9 1.96-2.9 3.98V23H7.5V8.1Z"/></svg>
+        <span>LinkedIn</span>
+      </a>
+      <a href="mailto:badreddine.belgharbi@spacefoot.com" aria-label="Email Badr Eddine BELGHARBI">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 5.5A2.5 2.5 0 0 1 4.5 3h15A2.5 2.5 0 0 1 22 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5v-13Zm2.5-.5a.5.5 0 0 0-.5.5v.56l8 5.2 8-5.2V5.5a.5.5 0 0 0-.5-.5h-15ZM20 8.45l-7.46 4.85a1 1 0 0 1-1.08 0L4 8.45V18.5a.5.5 0 0 0 .5.5h15a.5.5 0 0 0 .5-.5V8.45Z"/></svg>
+        <span>badreddine.belgharbi@spacefoot.com</span>
+      </a>
+    </nav>`;
+  shell.appendChild(footer);
+}
+
+function addUiPolishStyles() {
+  if (document.getElementById('uiPolishStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'uiPolishStyles';
+  style.textContent = `
+    @media (min-width: 721px) {
+      .hero { align-items: stretch; min-height: 300px; }
+      .hero-copy { display: flex; flex-direction: column; justify-content: center; }
+      .hero-actions { align-content: center; align-self: stretch; display: grid; grid-template-columns: repeat(3, max-content); justify-content: end; margin-left: auto; min-width: min(100%, 470px); }
+      .hero-actions .button { align-items: center; justify-content: center; min-height: 46px; white-space: nowrap; }
+      #runWorkflowButton { grid-column: 2 / 4; justify-self: end; }
+    }
+    .button.disabled, .button:disabled { cursor: not-allowed; opacity: .62; transform: none; }
+    .button:disabled:hover { box-shadow: none; transform: none; }
+    .site-footer { align-items: center; color: var(--muted); display: flex; gap: 18px; justify-content: space-between; margin-top: 28px; padding: 20px 4px 4px; }
+    .footer-copy { font-size: .9rem; font-weight: 700; margin: 0; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+    .footer-links a { align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; color: var(--link); display: inline-flex; font-size: .88rem; font-weight: 900; gap: 8px; padding: 9px 12px; text-decoration: none; }
+    .footer-links a:hover { border-color: var(--primary); transform: translateY(-1px); }
+    .footer-links svg { fill: currentColor; height: 17px; width: 17px; }
+    @media (max-width: 720px) {
+      .site-footer { align-items: flex-start; flex-direction: column; }
+      .footer-links { justify-content: flex-start; width: 100%; }
+      .footer-links a { max-width: 100%; }
+      .footer-links span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 async function openWorkflowIfReady() {
