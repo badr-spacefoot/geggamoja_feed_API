@@ -12,11 +12,18 @@
   <body>
     <div class="page-shell">
       <header class="hero">
-        <div>
+        <div class="hero-copy">
           <p class="eyebrow">Spacefoot supplier monitoring</p>
           <h1>Geggamoja Feed Dashboard</h1>
           <p class="subtitle">Shopify B2B catalog monitoring</p>
           <p id="lastUpdated" class="last-updated">Loading latest CSV update...</p>
+          <div id="feedStatus" class="feed-status pending" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="feedStatusLabel">Checking feed status</strong>
+              <span id="feedStatusDetail">Looking for active generation runs...</span>
+            </div>
+          </div>
         </div>
         <div class="hero-actions">
           <a class="button primary" href="feed.csv" download>Download CSV</a>
