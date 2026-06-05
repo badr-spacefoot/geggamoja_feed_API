@@ -1,9 +1,17 @@
-const DASHBOARD_VERSION = '2026-06-05-feed-status';
+const DASHBOARD_VERSION = '2026-06-05-ean-sort-movements';
 const ACTIONS_WORKFLOW_RUNS_URL = 'https://api.github.com/repos/badr-spacefoot/geggamoja_feed_API/actions/workflows/generate-feed.yml/runs?branch=main&per_page=1';
 const REQUIRED_FIELDS = ['variant_sku', 'barcode', 'price_amount', 'image_url', 'product_type'];
 const EURO = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR' });
 const INT = new Intl.NumberFormat('en-US');
-const state = { rows: [], filteredRows: [], history: [], charts: {} };
+const state = {
+  rows: [],
+  filteredRows: [],
+  history: [],
+  changes: null,
+  charts: {},
+  sort: { key: 'stock', direction: 'desc' },
+  pageSize: 100
+};
 let feedStatusTimer = null;
 
 const el = (id) => document.getElementById(id);
@@ -20,6 +28,7 @@ const typeName = (row) => clean(row.product_type) || 'Unclassified';
 
 window.addEventListener('DOMContentLoaded', () => {
   bindFilters();
+  bindSorting();
   el('refreshButton').addEventListener('click', loadDashboard);
   loadDashboard();
   updateFeedGenerationStatus();
@@ -99,7 +108,7 @@ async function loadDashboard() {
   showAlert('', false);
   try {
     ensureLibraries();
-    const [metadata, csvText, history] = await Promise.all([loadMetadata(), loadCsvText(), loadHistory()]);
+    const [metadata, csvText, history, changes] = await Promise.all([loadMetadata(), loadCsvText(), loadHistory(), loadChanges()]);
     const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: 'greedy' });
     if (parsed.errors?.length) {
       throw new Error(`CSV parsing failed: ${parsed.errors[0].message}`);
@@ -107,6 +116,7 @@ async function loadDashboard() {
 
     state.rows = parsed.data.map(normalizeRow).filter((row) => variantKey(row));
     state.history = history;
+    state.changes = changes;
     if (state.rows.length === 0) {
       throw new Error('feed.csv was loaded, but it did not contain any variants.');
     }
@@ -144,6 +154,16 @@ async function loadHistory() {
   }
 }
 
+async function loadChanges() {
+  try {
+    const response = await fetch(`feed-changes.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return null;
+    return response.json();
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function loadCsvText() {
   const response = await fetch(`feed.csv?ts=${Date.now()}`, { headers: { Accept: 'text/csv' } });
   if (!response.ok) {
@@ -158,6 +178,8 @@ function normalizeRow(row) {
   normalized.price = toNumber(normalized.price_amount);
   normalized.status = clean(normalized.product_status).toUpperCase() || 'UNKNOWN';
   normalized.productType = typeName(normalized);
+  normalized.normalizedBarcode = normalizeBarcode(normalized.barcode);
+  normalized.eanStatus = getEanStatus(normalized.barcode);
   normalized.updatedDate = normalized.updated_at ? new Date(normalized.updated_at) : null;
   if (Number.isNaN(normalized.updatedDate?.valueOf())) normalized.updatedDate = null;
   return normalized;
@@ -171,10 +193,11 @@ function renderDashboard(metadata) {
   text('draftVariants', INT.format(stats.draftVariants));
   text('totalStock', INT.format(stats.totalStock));
   text('variantsWithStock', INT.format(stats.variantsWithStock));
-  text('variantsOutOfStock', INT.format(stats.variantsOutOfStock));
+  text('badEans', INT.format(stats.badEans));
   text('qualityScore', `${stats.qualityScore}%`);
 
   text('missingBarcode', INT.format(stats.missing.barcode));
+  text('badEansDetail', INT.format(stats.badEans));
   text('missingImage', INT.format(stats.missing.image_url));
   text('missingPrice', INT.format(stats.missing.price_amount));
   text('missingStock', INT.format(stats.missingStock));
@@ -185,6 +208,7 @@ function renderDashboard(metadata) {
 
   renderCharts(stats);
   renderHistory(stats, metadata);
+  renderChanges();
   renderProductTypes(stats.productTypes);
   renderRecentUpdates(state.rows);
   populateFilters(state.rows);
@@ -200,9 +224,11 @@ function calculateStats(rows) {
   const variantsWithStock = variants.filter((row) => row.stock > 0).length;
   const variantsOutOfStock = variants.length - variantsWithStock;
   const missing = Object.fromEntries(REQUIRED_FIELDS.map((field) => [field, variants.filter((row) => !isPresent(row[field])).length]));
+  const badEans = variants.filter((row) => row.eanStatus === 'bad').length;
   const validRequiredFields = variants.reduce((sum, row) => sum + REQUIRED_FIELDS.filter((field) => isPresent(row[field])).length, 0);
-  const totalRequiredFields = variants.length * REQUIRED_FIELDS.length;
-  const qualityScore = totalRequiredFields ? Math.round((validRequiredFields / totalRequiredFields) * 100) : 0;
+  const validEans = variants.filter((row) => row.eanStatus === 'valid').length;
+  const totalRequiredFields = variants.length * (REQUIRED_FIELDS.length + 1);
+  const qualityScore = totalRequiredFields ? Math.round(((validRequiredFields + validEans) / totalRequiredFields) * 100) : 0;
   const missingStock = variants.filter((row) => !isPresent(row.inventory_available)).length;
   const lastUpdated = variants.map((row) => row.updatedDate).filter(Boolean).sort((a, b) => b - a)[0] ?? null;
 
@@ -216,6 +242,7 @@ function calculateStats(rows) {
     variantsOutOfStock,
     missing,
     missingStock,
+    badEans,
     qualityScore,
     productTypes: groupProductTypes(variants),
     priceBuckets: buildPriceBuckets(variants),
@@ -289,7 +316,7 @@ function renderCharts(stats) {
 
   state.charts.missing = new Chart(el('missingChart'), {
     type: 'bar',
-    data: { labels: ['Barcode', 'Image', 'Price', 'Product type'], datasets: [{ label: 'Missing', data: [stats.missing.barcode, stats.missing.image_url, stats.missing.price_amount, stats.missing.product_type], backgroundColor: '#d95f59' }] },
+    data: { labels: ['Missing barcode', 'Bad EAN', 'Missing image', 'Missing price', 'Missing product type'], datasets: [{ label: 'Variants', data: [stats.missing.barcode, stats.badEans, stats.missing.image_url, stats.missing.price_amount, stats.missing.product_type], backgroundColor: '#d95f59' }] },
     options: chartOptions()
   });
 }
@@ -320,6 +347,7 @@ function buildCurrentSnapshot(stats, metadata) {
     variantsWithStock: stats.variantsWithStock,
     variantsOutOfStock: stats.variantsOutOfStock,
     qualityScore: stats.qualityScore,
+    badEans: stats.badEans,
     rowCount: metadata?.rowCount ?? stats.totalVariants
   };
 }
@@ -337,6 +365,7 @@ function normalizeHistory(snapshots) {
       variantCount: toNumber(snapshot.variantCount ?? snapshot.rowCount),
       totalStock: toNumber(snapshot.totalStock),
       qualityScore: toNumber(snapshot.qualityScore),
+      badEans: toNumber(snapshot.badEans),
       rowCount: toNumber(snapshot.rowCount)
     });
   }
@@ -386,6 +415,20 @@ function renderHistoryTable(snapshots) {
   el('historyBody').innerHTML = rows || '<tr><td colspan="5">No history available yet.</td></tr>';
 }
 
+function renderChanges() {
+  const changes = state.changes;
+  const newProducts = Array.isArray(changes?.newProducts) ? changes.newProducts : [];
+  const stockDrops = Array.isArray(changes?.stockDrops) ? changes.stockDrops : [];
+
+  el('newProductsBody').innerHTML = newProducts.slice(0, 12).map((item) => `
+    <tr><td>${escapeHtml(item.title || item.handle || '-')}</td><td>${escapeHtml(item.productType || '-')}</td><td>${INT.format(item.variantCount || 0)}</td><td>${INT.format(item.stock || 0)}</td></tr>
+  `).join('') || '<tr><td colspan="4">No newly added products detected yet.</td></tr>';
+
+  el('stockMoversBody').innerHTML = stockDrops.slice(0, 12).map((item) => `
+    <tr><td>${escapeHtml(item.title || item.handle || '-')}</td><td>${INT.format(item.previousStock || 0)}</td><td>${INT.format(item.currentStock || 0)}</td><td><span class="badge stock-out">${INT.format(item.delta || 0)}</span></td></tr>
+  `).join('') || '<tr><td colspan="4">No stock decreases detected yet.</td></tr>';
+}
+
 function chartOptions(extra = {}) {
   return { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: extra.indexAxis ? undefined : { y: { beginAtZero: true, ticks: { precision: 0 } } }, ...extra };
 }
@@ -425,7 +468,23 @@ function setOptions(select, options, firstLabel) {
 }
 
 function bindFilters() {
-  ['searchInput', 'statusFilter', 'stockFilter', 'typeFilter'].forEach((id) => el(id).addEventListener('input', applyFilters));
+  ['searchInput', 'statusFilter', 'stockFilter', 'typeFilter', 'eanFilter'].forEach((id) => el(id).addEventListener('input', applyFilters));
+  el('pageSizeSelect').addEventListener('input', () => {
+    const value = el('pageSizeSelect').value;
+    state.pageSize = value === 'all' ? Infinity : toNumber(value);
+    renderVariantTable();
+  });
+}
+
+function bindSorting() {
+  document.querySelectorAll('[data-sort]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.sort;
+      const sameKey = state.sort.key === key;
+      state.sort = { key, direction: sameKey && state.sort.direction === 'asc' ? 'desc' : 'asc' };
+      applyFilters();
+    });
+  });
 }
 
 function applyFilters() {
@@ -433,25 +492,54 @@ function applyFilters() {
   const status = el('statusFilter').value;
   const stock = el('stockFilter').value;
   const type = el('typeFilter').value;
+  const ean = el('eanFilter').value;
   const variants = uniqueRows(state.rows, variantKey);
-  state.filteredRows = variants.filter((row) => {
+  state.filteredRows = sortRows(variants.filter((row) => {
     const matchesSearch = !search || [row.variant_sku, row.product_title, row.barcode, row.productType].some((value) => clean(value).toLowerCase().includes(search));
     const matchesStatus = !status || row.status === status;
     const matchesStock = !stock || (stock === 'in' ? row.stock > 0 : row.stock <= 0);
     const matchesType = !type || row.productType === type;
-    return matchesSearch && matchesStatus && matchesStock && matchesType;
-  });
+    const matchesEan = !ean || row.eanStatus === ean;
+    return matchesSearch && matchesStatus && matchesStock && matchesType && matchesEan;
+  }));
   renderVariantTable();
+  updateSortButtons();
+}
+
+function sortRows(rows) {
+  const { key, direction } = state.sort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => compareSortValue(sortValue(a, key), sortValue(b, key)) * multiplier);
+}
+
+function sortValue(row, key) {
+  if (key === 'price' || key === 'stock') return row[key];
+  if (key === 'productType') return row.productType;
+  return clean(row[key]).toLowerCase();
+}
+
+function compareSortValue(a, b) {
+  if (typeof a === 'number' || typeof b === 'number') return (a || 0) - (b || 0);
+  return String(a).localeCompare(String(b));
+}
+
+function updateSortButtons() {
+  document.querySelectorAll('[data-sort]').forEach((button) => {
+    const active = button.dataset.sort === state.sort.key;
+    button.classList.toggle('active', active);
+    button.textContent = `${button.textContent.replace(/ [↑↓]$/, '')}${active ? (state.sort.direction === 'asc' ? ' ↑' : ' ↓') : ''}`;
+  });
 }
 
 function renderVariantTable() {
-  const visible = state.filteredRows.slice(0, 100);
-  el('filterSummary').textContent = `Showing ${INT.format(visible.length)} of ${INT.format(state.filteredRows.length)} matching variants${state.filteredRows.length > visible.length ? ' (first 100 shown)' : ''}.`;
+  const limit = Number.isFinite(state.pageSize) ? state.pageSize : state.filteredRows.length;
+  const visible = state.filteredRows.slice(0, limit);
+  el('filterSummary').textContent = `Showing ${INT.format(visible.length)} of ${INT.format(state.filteredRows.length)} matching variants${state.filteredRows.length > visible.length ? ` (first ${INT.format(limit)} shown)` : ''}.`;
   el('variantsBody').innerHTML = visible.map((row) => `
     <tr>
       <td>${renderThumbnail(row)}</td>
       <td>${escapeHtml(row.variant_sku || '-')}</td>
-      <td>${escapeHtml(row.barcode || '-')}</td>
+      <td>${renderBarcode(row)}</td>
       <td class="product-cell"><strong>${escapeHtml(row.product_title || '-')}</strong><span>${escapeHtml(row.product_handle || '')}</span></td>
       <td>${escapeHtml(row.productType)}</td>
       <td><span class="badge ${row.status.toLowerCase()}">${escapeHtml(row.status)}</span></td>
@@ -461,6 +549,13 @@ function renderVariantTable() {
   `).join('') || '<tr><td colspan="8">No variants match the selected filters.</td></tr>';
 }
 
+function renderBarcode(row) {
+  if (row.eanStatus === 'missing') return '<span class="muted">-</span>';
+  const badgeClass = row.eanStatus === 'valid' ? 'ean-valid' : 'ean-bad';
+  const label = row.eanStatus === 'valid' ? 'Valid EAN' : 'Bad EAN';
+  return `<span>${escapeHtml(row.barcode)}</span><span class="ean-pill ${badgeClass}">${label}</span>`;
+}
+
 function renderThumbnail(row) {
   const src = clean(row.image_url);
   if (!src) return '<div class="product-thumb empty" aria-label="No image">No image</div>';
@@ -468,11 +563,34 @@ function renderThumbnail(row) {
   return `<a class="product-thumb" href="${escapeAttribute(src)}" target="_blank" rel="noopener"><img src="${escapeAttribute(src)}" alt="${title}" loading="lazy" onerror="this.closest('a').classList.add('empty'); this.remove();" /></a>`;
 }
 
+function getEanStatus(value) {
+  const barcode = normalizeBarcode(value);
+  if (!barcode) return 'missing';
+  return isValidEan(barcode) ? 'valid' : 'bad';
+}
+
+function normalizeBarcode(value) {
+  return clean(value).replace(/[\s-]/g, '');
+}
+
+function isValidEan(value) {
+  if (!/^\d{8}$|^\d{13}$/.test(value)) return false;
+  const digits = [...value].map(Number);
+  const checkDigit = digits.pop();
+  const sum = digits.reduce((total, digit, index) => {
+    const weight = value.length === 13 ? (index % 2 === 0 ? 1 : 3) : (index % 2 === 0 ? 3 : 1);
+    return total + digit * weight;
+  }, 0);
+  return (10 - (sum % 10)) % 10 === checkDigit;
+}
+
 function renderEmptyState() {
-  ['totalProducts', 'totalVariants', 'activeVariants', 'draftVariants', 'totalStock', 'variantsWithStock', 'variantsOutOfStock', 'qualityScore', 'missingBarcode', 'missingImage', 'missingPrice', 'missingStock', 'missingProductType', 'deltaProducts', 'deltaVariants', 'deltaStock', 'deltaQuality'].forEach((id) => text(id, '-'));
+  ['totalProducts', 'totalVariants', 'activeVariants', 'draftVariants', 'totalStock', 'variantsWithStock', 'badEans', 'qualityScore', 'missingBarcode', 'badEansDetail', 'missingImage', 'missingPrice', 'missingStock', 'missingProductType', 'deltaProducts', 'deltaVariants', 'deltaStock', 'deltaQuality'].forEach((id) => text(id, '-'));
   text('lastUpdated', 'Last CSV update: unavailable');
   el('productTypesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
   el('recentUpdatesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
+  el('newProductsBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
+  el('stockMoversBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
   el('variantsBody').innerHTML = '<tr><td colspan="8">No data available.</td></tr>';
   el('historyBody').innerHTML = '<tr><td colspan="5">No history available.</td></tr>';
   destroyCharts();
