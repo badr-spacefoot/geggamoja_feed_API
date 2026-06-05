@@ -179,10 +179,16 @@ export async function generateFeedCsv(env = process.env) {
 
 export async function buildFeedRows(env = process.env, client = createShopifyClient(env)) {
   await validateCatalogConfiguration(env, client);
-  const [products, prices] = await Promise.all([
+  const [products, priceList] = await Promise.all([
     fetchPublicationProducts(env.SHOPIFY_PUBLICATION_GID, client),
     fetchPriceListPrices(env.SHOPIFY_PRICE_LIST_GID, client)
   ]);
+
+  if (priceList.currency !== 'EUR') {
+    throw new Error(`Expected the configured Shopify price list to use EUR, but received ${priceList.currency}.`);
+  }
+
+  const prices = priceList.prices;
 
   if (products.length === 0) {
     throw new Error('The configured Shopify catalog publication returned no products.');
@@ -192,7 +198,9 @@ export async function buildFeedRows(env = process.env, client = createShopifyCli
   for (const product of products) {
     for (const variant of product.variants) {
       const inventoryLevel = summarizeInventoryLevels(variant.inventoryItem?.inventoryLevels?.nodes ?? []);
-      rows.push(toCsvRow({ product, variant, inventoryLevel, priceEntry: prices.get(variant.id), env }));
+      rows.push(
+        toCsvRow({ product, variant, inventoryLevel, priceEntry: prices.get(variant.id), priceListCurrency: priceList.currency, env })
+      );
     }
   }
 
@@ -344,10 +352,10 @@ async function fetchPriceListPrices(priceListId, client) {
     after = connection?.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : undefined;
   } while (after);
 
-  return prices;
+  return { prices, currency };
 }
 
-function toCsvRow({ product, variant, inventoryLevel, priceEntry, env }) {
+function toCsvRow({ product, variant, inventoryLevel, priceEntry, priceListCurrency, env }) {
   const options = normalizeOptions(product, variant);
   return {
     brand: 'Geggamoja',
@@ -366,7 +374,7 @@ function toCsvRow({ product, variant, inventoryLevel, priceEntry, env }) {
     option3_name: options[2]?.name ?? '',
     option3_value: options[2]?.value ?? '',
     price_amount: priceEntry?.amount ?? variant.price ?? '',
-    price_currency: priceEntry?.currency ?? 'EUR',
+    price_currency: priceEntry?.currency ?? priceListCurrency ?? 'EUR',
     compare_at_price: priceEntry?.compareAtPrice ?? variant.compareAtPrice ?? '',
     inventory_item_id: variant.inventoryItem?.id ?? '',
     inventory_tracked: variant.inventoryItem?.tracked ?? '',

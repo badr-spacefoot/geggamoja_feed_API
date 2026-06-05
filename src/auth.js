@@ -29,7 +29,7 @@ export function requireLogin(req, res, next) {
     return;
   }
 
-  if (req.accepts('html')) {
+  if (!req.path.startsWith('/api/') && req.accepts('html')) {
     res.redirect('/login');
     return;
   }
@@ -37,7 +37,7 @@ export function requireLogin(req, res, next) {
   res.status(401).json({ error: 'Authentication required.' });
 }
 
-export function authRouter({ appPassword }) {
+export function authRouter({ appPassword, publicDir = 'public' }) {
   const router = express.Router();
 
   router.get('/login', (req, res) => {
@@ -45,13 +45,13 @@ export function authRouter({ appPassword }) {
       res.redirect('/');
       return;
     }
-    res.sendFile('login.html', { root: 'public' });
+    res.sendFile('login.html', { root: publicDir });
   });
 
   router.post('/login', express.urlencoded({ extended: false }), (req, res) => {
     const password = req.body?.password ?? '';
     if (!timingSafeEqualString(password, appPassword)) {
-      res.status(401).sendFile('login.html', { root: 'public' });
+      res.status(401).sendFile('login.html', { root: publicDir });
       return;
     }
 

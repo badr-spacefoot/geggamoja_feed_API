@@ -9,8 +9,8 @@ The app uses Shopify Admin GraphQL API on the server, reads included products fr
 - Password-protected internal web UI.
 - `GET /api/feed.csv` endpoint that fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
 - Environment-variable based secret management.
-- Product, variant, price-list, inventory, product, variant, and inventory-level pagination.
-- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, and invalid pagination responses.
+- Product, variant, price-list, and inventory-level pagination.
+- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, non-EUR price-list configuration, and invalid pagination responses.
 
 ## CSV columns
 
@@ -79,6 +79,12 @@ For development with Node's watch mode:
 npm run dev
 ```
 
+Run the lightweight unit tests:
+
+```bash
+npm test
+```
+
 Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to download the live feed from `/api/feed.csv`; this also keeps an in-memory copy available at `/api/feed/latest.csv` until the server restarts.
 
 You can also verify the Shopify catalog configuration without starting the web app:
@@ -112,4 +118,27 @@ src/
 public/
   index.html   # Authenticated internal UI
   login.html   # Password login page
+```
+
+
+## Git branch troubleshooting
+
+If `git pull` says `Déjà à jour` / `Already up to date` after Git fetches another branch, your current local branch probably is not tracking that remote branch. Check your current branch with:
+
+```bash
+git branch --show-current
+```
+
+Then switch to the generated branch explicitly, for example:
+
+```bash
+git fetch origin
+git checkout codex/create-node.js-express-web-app-for-csv-feed
+git pull --ff-only
+```
+
+Or, if the branch only exists on the remote:
+
+```bash
+git checkout -t origin/codex/create-node.js-express-web-app-for-csv-feed
 ```

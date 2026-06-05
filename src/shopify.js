@@ -8,6 +8,7 @@ const REQUIRED_SHOPIFY_ENV = [
 
 const DEFAULT_MAX_RETRIES = 4;
 const MIN_RETRY_DELAY_MS = 1000;
+const NON_RETRYABLE_ERROR = Symbol('nonRetryableError');
 
 export function validateShopifyEnv(env = process.env) {
   const missing = REQUIRED_SHOPIFY_ENV.filter((key) => !env[key]);
@@ -80,7 +81,9 @@ export function createShopifyClient(env = process.env) {
         }
 
         if (!response.ok) {
-          throw new Error(`Shopify HTTP error ${response.status}: ${summarizePayload(payload)}`);
+          const error = new Error(`Shopify HTTP error ${response.status}: ${summarizePayload(payload)}`);
+          if (response.status < 500 && response.status !== 429) error[NON_RETRYABLE_ERROR] = true;
+          throw error;
         }
 
         if (payload.errors?.length) {
@@ -90,14 +93,16 @@ export function createShopifyClient(env = process.env) {
             attempt += 1;
             continue;
           }
-          throw new Error(`Shopify GraphQL error(s): ${payload.errors.map((error) => error.message).join('; ')}`);
+          const error = new Error(`Shopify GraphQL error(s): ${payload.errors.map((error) => error.message).join('; ')}`);
+          error[NON_RETRYABLE_ERROR] = true;
+          throw error;
         }
 
         await pauseForThrottle(payload.extensions?.cost?.throttleStatus);
         return payload.data;
       } catch (error) {
         lastError = error;
-        if (attempt >= maxRetries) break;
+        if (error?.[NON_RETRYABLE_ERROR] || attempt >= maxRetries) break;
         await sleep(backoffMs(attempt));
         attempt += 1;
       }

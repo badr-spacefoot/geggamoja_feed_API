@@ -41,7 +41,7 @@ app.use(
   })
 );
 
-app.use(authRouter({ appPassword: process.env.APP_PASSWORD }));
+app.use(authRouter({ appPassword: process.env.APP_PASSWORD, publicDir }));
 
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true });
@@ -60,7 +60,6 @@ app.get('/api/feed.csv', requireLogin, async (_req, res, next) => {
     next(error);
   }
 });
-
 
 app.get('/api/feed/latest.csv', requireLogin, (_req, res) => {
   if (!latestFeed) {
