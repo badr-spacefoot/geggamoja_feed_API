@@ -1,0 +1,114 @@
+# Geggamoja Spacefoot B2B Catalog Feed
+
+Small internal Node.js/Express web app for generating a downloadable CSV feed for the Geggamoja Spacefoot / France EUR B2B Shopify catalog.
+
+The app uses Shopify Admin GraphQL API on the server, reads products from the configured catalog publication, resolves EUR prices from the configured price list, reads variant inventory levels, and returns one CSV row per variant with inventory quantities summed across inventory locations.
+
+## What it provides
+
+- Password-protected internal web UI.
+- `GET /api/feed.csv` endpoint that fetches live Shopify data and returns an Excel/LibreOffice-friendly CSV download.
+- Environment-variable based secret management.
+- Product, variant, price-list, inventory, product, variant, and inventory-level pagination.
+- Defensive errors for missing environment variables, Shopify HTTP failures, GraphQL errors, empty catalogs, and invalid pagination responses.
+
+## CSV columns
+
+The CSV includes these columns:
+
+```text
+brand, product_id, product_handle, product_title, product_type, product_status,
+variant_id, variant_sku, barcode,
+option1_name, option1_value, option2_name, option2_value, option3_name, option3_value,
+price_amount, price_currency, compare_at_price,
+inventory_item_id, inventory_tracked, inventory_available, inventory_on_hand, inventory_committed,
+inventory_location_id, inventory_location_name,
+image_url, product_url, tags, updated_at
+```
+
+## Configure `.env`
+
+Copy the example file and fill in real values:
+
+```bash
+cp .env.example .env
+```
+
+Required app authentication variables:
+
+```env
+APP_PASSWORD=replace-with-a-strong-internal-password
+SESSION_SECRET=replace-with-at-least-32-random-characters
+```
+
+Required Shopify variables:
+
+```env
+SHOPIFY_SHOP_DOMAIN=your-shop.myshopify.com
+SHOPIFY_ADMIN_API_VERSION=2025-10
+SHOPIFY_ADMIN_ACCESS_TOKEN=shpat_replace_me
+SHOPIFY_CATALOG_GID=gid://shopify/CompanyLocationCatalog/1234567890
+SHOPIFY_PUBLICATION_GID=gid://shopify/Publication/1234567890
+SHOPIFY_PRICE_LIST_GID=gid://shopify/PriceList/1234567890
+```
+
+Notes:
+
+- Use a Shopify Admin API access token with the minimum scopes required to read products, publications/catalogs, price lists, and inventory.
+- `SHOPIFY_ADMIN_ACCESS_TOKEN` is only read by server-side code. Do not put it in frontend JavaScript, static HTML, or client-side build variables.
+- Use the Spacefoot / France EUR catalog IDs, not the full shop catalog.
+
+## Run locally
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the app:
+
+```bash
+npm start
+```
+
+For development with Node's watch mode:
+
+```bash
+npm run dev
+```
+
+Open <http://localhost:3000>. Unauthenticated visitors are redirected to `/login`. After login, click **Generate CSV** to download the live feed from `/api/feed.csv`.
+
+You can also verify the Shopify catalog configuration without starting the web app:
+
+```bash
+node verify-shopify-catalog.mjs
+```
+
+## Deploy safely
+
+- Deploy to a server platform that can run Node.js backend code, such as a private VM, Render, Fly.io, Heroku, Railway, AWS ECS/App Runner, Google Cloud Run, or Azure App Service.
+- Configure all secrets in the hosting provider's environment variable / secret manager UI.
+- Serve the app over HTTPS only.
+- In production, set `NODE_ENV=production`.
+- If the app is behind a trusted HTTPS reverse proxy, set `TRUST_PROXY=true` so secure cookies work correctly.
+- Restrict access further with VPN, IP allowlists, SSO, or an internal network where possible.
+- Rotate `APP_PASSWORD`, `SESSION_SECRET`, and the Shopify Admin token if they are exposed.
+
+## Why GitHub Pages alone is not suitable
+
+GitHub Pages only serves static files. This project needs server-side code to protect `SHOPIFY_ADMIN_ACCESS_TOKEN`, create authenticated sessions, call Shopify Admin GraphQL API, handle pagination and throttling, and stream a generated CSV. Putting the token into a static GitHub Pages frontend would expose the Shopify Admin token to anyone who can view the page source or browser network requests.
+
+## Project structure
+
+```text
+src/
+  auth.js      # Login, logout, and route guard helpers
+  feed.js      # Shopify feed normalization and CSV generation
+  server.js    # Express app and routes
+  shopify.js   # Shopify Admin GraphQL client and environment validation
+public/
+  index.html   # Authenticated internal UI
+  login.html   # Password login page
+```

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geggamoja Feed Login</title>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { align-items: center; background: #f7f4ef; color: #222; display: flex; min-height: 100vh; justify-content: center; margin: 0; }
+      main { background: #fff; border-radius: 18px; box-shadow: 0 16px 40px rgb(0 0 0 / 10%); max-width: 420px; padding: 2rem; width: calc(100% - 2rem); }
+      h1 { margin: 0 0 .5rem; }
+      label { display: block; font-weight: 700; margin: 1.5rem 0 .5rem; }
+      input { border: 1px solid #bbb; border-radius: 10px; box-sizing: border-box; font: inherit; padding: .85rem 1rem; width: 100%; }
+      button { background: #1d4f3f; border: 0; border-radius: 999px; color: #fff; cursor: pointer; font: inherit; font-weight: 700; margin-top: 1rem; padding: .85rem 1.25rem; width: 100%; }
+      p { color: #555; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Geggamoja</h1>
+      <p>Sign in to generate the Spacefoot B2B catalog feed.</p>
+      <form method="post" action="/login">
+        <label for="password">App password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+        <button type="submit">Log in</button>
+      </form>
+    </main>
+  </body>
+</html>

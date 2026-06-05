@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geggamoja CSV Feed</title>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { background: #f7f4ef; color: #222; margin: 0; min-height: 100vh; }
+      header { align-items: center; display: flex; justify-content: space-between; padding: 1rem 1.5rem; }
+      main { background: #fff; border-radius: 22px; box-shadow: 0 16px 40px rgb(0 0 0 / 10%); margin: 3rem auto; max-width: 760px; padding: 2rem; width: calc(100% - 2rem); }
+      h1 { font-size: clamp(2rem, 7vw, 4rem); margin: 0; }
+      p { color: #555; font-size: 1.1rem; line-height: 1.6; }
+      a.button, button { background: #1d4f3f; border: 0; border-radius: 999px; color: #fff; cursor: pointer; display: inline-block; font: inherit; font-weight: 700; margin-right: .75rem; padding: .9rem 1.35rem; text-decoration: none; }
+      .secondary { background: #e8e2d9; color: #222; }
+      .actions { margin-top: 2rem; }
+      .status { border-left: 4px solid #1d4f3f; margin-top: 2rem; padding: .5rem 0 .5rem 1rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Geggamoja</strong>
+      <form method="post" action="/logout"><button class="secondary" type="submit">Log out</button></form>
+    </header>
+    <main>
+      <h1>Geggamoja</h1>
+      <p>Generate and download the Spacefoot / France EUR B2B catalog feed directly from Shopify Admin GraphQL API.</p>
+      <div class="actions">
+        <a class="button" href="/api/feed.csv" download>Generate CSV</a>
+        <a class="button secondary" href="/api/feed.csv" download>Download latest generated CSV</a>
+      </div>
+      <p class="status">Status: ready. The CSV is generated live when you click a download button.</p>
+    </main>
+  </body>
+</html>
