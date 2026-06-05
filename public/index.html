@@ -8,6 +8,7 @@
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
     <script src="app.js" defer></script>
+    <script src="msrp-fix.js" defer></script>
   </head>
   <body>
     <div class="page-shell">
@@ -49,8 +50,8 @@
         <section class="dashboard-grid charts-grid" aria-label="Catalog charts">
           <article class="panel chart-panel"><div class="panel-heading"><h2>Active vs Draft</h2><p>Variant status split</p></div><canvas id="statusChart"></canvas></article>
           <article class="panel chart-panel"><div class="panel-heading"><h2>Stock by product type</h2><p>Available units by category</p></div><canvas id="stockTypeChart"></canvas></article>
-          <article class="panel chart-panel"><div class="panel-heading"><h2>Price distribution</h2><p>Variant prices in EUR</p></div><canvas id="priceChart"></canvas></article>
-          <article class="panel chart-panel"><div class="panel-heading"><h2>Missing / invalid data</h2><p>Required feed fields and EAN checks</p></div><canvas id="missingChart"></canvas></article>
+          <article class="panel chart-panel"><div class="panel-heading"><h2>MSRP distribution</h2><p>Variant MSRP in EUR</p></div><canvas id="priceChart"></canvas></article>
+          <article class="panel chart-panel"><div class="panel-heading"><h2>Missing / invalid data</h2><p>Required feed fields, MSRP, and EAN checks</p></div><canvas id="missingChart"></canvas></article>
         </section>
 
         <section class="panel history-panel">
@@ -71,12 +72,12 @@
 
         <section class="dashboard-grid two-column">
           <article class="panel">
-            <div class="panel-heading"><h2>Feed Quality</h2><p>Required field completeness and EAN validation</p></div>
+            <div class="panel-heading"><h2>Feed Quality</h2><p>Required field completeness, MSRP, and EAN validation</p></div>
             <div class="quality-list">
               <div><span>Missing barcode</span><strong id="missingBarcode">-</strong></div>
               <div><span>Bad EAN barcode</span><strong id="badEansDetail">-</strong></div>
               <div><span>Missing image</span><strong id="missingImage">-</strong></div>
-              <div><span>Missing price</span><strong id="missingPrice">-</strong></div>
+              <div><span>Missing MSRP</span><strong id="missingPrice">-</strong></div>
               <div><span>Missing stock value</span><strong id="missingStock">-</strong></div>
               <div><span>Out of stock variants</span><strong id="outOfStockDetail">-</strong></div>
               <div><span>Missing product type</span><strong id="missingProductType">-</strong></div>
@@ -102,8 +103,8 @@
         </section>
 
         <section class="panel">
-          <div class="panel-heading"><h2>Top Product Types</h2><p>Variant count, stock, and average price</p></div>
-          <div class="table-wrap"><table><thead><tr><th>Product type</th><th>Variants</th><th>Total stock</th><th>Average price</th></tr></thead><tbody id="productTypesBody"><tr><td colspan="4">Loading...</td></tr></tbody></table></div>
+          <div class="panel-heading"><h2>Top Product Types</h2><p>Variant count, stock, and average MSRP</p></div>
+          <div class="table-wrap"><table><thead><tr><th>Product type</th><th>Variants</th><th>Total stock</th><th>Average MSRP</th></tr></thead><tbody id="productTypesBody"><tr><td colspan="4">Loading...</td></tr></tbody></table></div>
         </section>
 
         <section class="panel">
@@ -130,7 +131,7 @@
                   <th><button class="sort-button" type="button" data-sort="product_title">Product</button></th>
                   <th><button class="sort-button" type="button" data-sort="productType">Type</button></th>
                   <th><button class="sort-button" type="button" data-sort="status">Status</button></th>
-                  <th><button class="sort-button" type="button" data-sort="price">Price</button></th>
+                  <th><button class="sort-button" type="button" data-sort="price">MSRP</button></th>
                   <th><button class="sort-button" type="button" data-sort="stock">Stock</button></th>
                 </tr>
               </thead>
