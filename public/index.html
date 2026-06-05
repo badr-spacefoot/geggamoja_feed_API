@@ -41,7 +41,7 @@
           <article class="kpi-card"><span>Draft variants</span><strong id="draftVariants">-</strong></article>
           <article class="kpi-card"><span>Total available stock</span><strong id="totalStock">-</strong></article>
           <article class="kpi-card"><span>Variants with stock</span><strong id="variantsWithStock">-</strong></article>
-          <article class="kpi-card"><span>Variants out of stock</span><strong id="variantsOutOfStock">-</strong></article>
+          <article class="kpi-card"><span>Bad EAN codes</span><strong id="badEans">-</strong></article>
           <article class="kpi-card score"><span>Feed quality score</span><strong id="qualityScore">-</strong></article>
         </section>
 
@@ -59,7 +59,7 @@
             <canvas id="priceChart"></canvas>
           </article>
           <article class="panel chart-panel">
-            <div class="panel-heading"><h2>Missing data</h2><p>Required feed fields</p></div>
+            <div class="panel-heading"><h2>Missing / invalid data</h2><p>Required feed fields and EAN checks</p></div>
             <canvas id="missingChart"></canvas>
           </article>
         </section>
@@ -85,9 +85,10 @@
 
         <section class="dashboard-grid two-column">
           <article class="panel">
-            <div class="panel-heading"><h2>Feed Quality</h2><p>Required field completeness</p></div>
+            <div class="panel-heading"><h2>Feed Quality</h2><p>Required field completeness and EAN validation</p></div>
             <div class="quality-list">
               <div><span>Missing barcode</span><strong id="missingBarcode">-</strong></div>
+              <div><span>Bad EAN barcode</span><strong id="badEansDetail">-</strong></div>
               <div><span>Missing image</span><strong id="missingImage">-</strong></div>
               <div><span>Missing price</span><strong id="missingPrice">-</strong></div>
               <div><span>Missing stock</span><strong id="missingStock">-</strong></div>
@@ -106,6 +107,28 @@
           </article>
         </section>
 
+        <section class="dashboard-grid two-column">
+          <article class="panel">
+            <div class="panel-heading"><h2>New Products</h2><p>Products added since the previous recovery</p></div>
+            <div class="table-wrap movement-table">
+              <table>
+                <thead><tr><th>Product</th><th>Type</th><th>Variants</th><th>Stock</th></tr></thead>
+                <tbody id="newProductsBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-heading"><h2>Likely Best Sellers</h2><p>Largest stock decreases since the previous recovery</p></div>
+            <div class="table-wrap movement-table">
+              <table>
+                <thead><tr><th>Product</th><th>Before</th><th>Now</th><th>Delta</th></tr></thead>
+                <tbody id="stockMoversBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
         <section class="panel">
           <div class="panel-heading"><h2>Top Product Types</h2><p>Variant count, stock, and average price</p></div>
           <div class="table-wrap">
@@ -117,17 +140,30 @@
         </section>
 
         <section class="panel">
-          <div class="panel-heading"><h2>Catalog Search</h2><p>Filter variants by SKU, title, barcode, status, stock, or product type</p></div>
-          <div class="filters">
+          <div class="panel-heading"><h2>Catalog Search</h2><p>Filter, sort, and inspect variants</p></div>
+          <div class="filters catalog-controls">
             <label>Search<input id="searchInput" type="search" placeholder="SKU, title, barcode..." /></label>
             <label>Status<select id="statusFilter"><option value="">All statuses</option></select></label>
             <label>Stock<select id="stockFilter"><option value="">All stock</option><option value="in">In stock</option><option value="out">Out of stock</option></select></label>
+            <label>EAN<select id="eanFilter"><option value="">All barcodes</option><option value="valid">Valid EAN</option><option value="bad">Bad EAN</option><option value="missing">Missing barcode</option></select></label>
             <label>Product type<select id="typeFilter"><option value="">All product types</option></select></label>
+            <label>Rows<select id="pageSizeSelect"><option value="25">25 rows</option><option value="50">50 rows</option><option value="100" selected>100 rows</option><option value="250">250 rows</option><option value="all">All rows</option></select></label>
           </div>
           <p id="filterSummary" class="filter-summary">Loading catalog...</p>
           <div class="table-wrap catalog-table">
             <table>
-              <thead><tr><th>Image</th><th>SKU</th><th>Barcode</th><th>Product</th><th>Type</th><th>Status</th><th>Price</th><th>Stock</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Image</th>
+                  <th><button class="sort-button" type="button" data-sort="variant_sku">SKU</button></th>
+                  <th><button class="sort-button" type="button" data-sort="barcode">Barcode</button></th>
+                  <th><button class="sort-button" type="button" data-sort="product_title">Product</button></th>
+                  <th><button class="sort-button" type="button" data-sort="productType">Type</button></th>
+                  <th><button class="sort-button" type="button" data-sort="status">Status</button></th>
+                  <th><button class="sort-button" type="button" data-sort="price">Price</button></th>
+                  <th><button class="sort-button" type="button" data-sort="stock">Stock</button></th>
+                </tr>
+              </thead>
               <tbody id="variantsBody"><tr><td colspan="8">Loading...</td></tr></tbody>
             </table>
           </div>
