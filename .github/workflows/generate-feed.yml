@@ -2,6 +2,16 @@ name: Generate Shopify catalog feed
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/generate-feed.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'public/**'
+      - 'scripts/**'
+      - 'src/**'
   schedule:
     - cron: '0 6 * * *'
 
