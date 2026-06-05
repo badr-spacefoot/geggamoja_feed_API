@@ -1,8 +1,10 @@
-const DASHBOARD_VERSION = '2026-06-05-history-thumbnails';
+const DASHBOARD_VERSION = '2026-06-05-feed-status';
+const ACTIONS_WORKFLOW_RUNS_URL = 'https://api.github.com/repos/badr-spacefoot/geggamoja_feed_API/actions/workflows/generate-feed.yml/runs?branch=main&per_page=1';
 const REQUIRED_FIELDS = ['variant_sku', 'barcode', 'price_amount', 'image_url', 'product_type'];
 const EURO = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR' });
 const INT = new Intl.NumberFormat('en-US');
 const state = { rows: [], filteredRows: [], history: [], charts: {} };
+let feedStatusTimer = null;
 
 const el = (id) => document.getElementById(id);
 const text = (id, value) => { el(id).textContent = value; };
@@ -20,7 +22,78 @@ window.addEventListener('DOMContentLoaded', () => {
   bindFilters();
   el('refreshButton').addEventListener('click', loadDashboard);
   loadDashboard();
+  updateFeedGenerationStatus();
 });
+
+async function updateFeedGenerationStatus() {
+  try {
+    const response = await fetch(`${ACTIONS_WORKFLOW_RUNS_URL}&ts=${Date.now()}`, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!response.ok) throw new Error(`GitHub Actions returned ${response.status}`);
+    const payload = await response.json();
+    const run = payload.workflow_runs?.[0];
+
+    if (!run) {
+      setFeedStatus('Feed status unavailable', 'No workflow run found yet.', 'pending');
+      scheduleFeedStatusRefresh(120000);
+      return;
+    }
+
+    if (isActiveRun(run)) {
+      const activeStep = await getCurrentWorkflowStep(run.jobs_url);
+      const detail = activeStep ? `Current step: ${activeStep}` : `Started: ${formatDateTime(run.run_started_at || run.created_at)}`;
+      setFeedStatus('Feed generation in progress', detail, 'running');
+      scheduleFeedStatusRefresh(30000);
+      return;
+    }
+
+    if (run.conclusion === 'success') {
+      setFeedStatus('Feed ready', `Last workflow success: ${formatDateTime(run.updated_at)}`, 'success');
+      scheduleFeedStatusRefresh(120000);
+      return;
+    }
+
+    setFeedStatus('Last generation needs attention', `${describeConclusion(run.conclusion)}: ${formatDateTime(run.updated_at)}`, 'error');
+    scheduleFeedStatusRefresh(120000);
+  } catch (error) {
+    setFeedStatus('Feed status unavailable', error.message || 'Could not read GitHub Actions status.', 'pending');
+    scheduleFeedStatusRefresh(120000);
+  }
+}
+
+async function getCurrentWorkflowStep(jobsUrl) {
+  if (!jobsUrl) return '';
+  try {
+    const response = await fetch(`${jobsUrl}${jobsUrl.includes('?') ? '&' : '?'}ts=${Date.now()}`, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!response.ok) return '';
+    const payload = await response.json();
+    const job = payload.jobs?.find((item) => item.status === 'in_progress') || payload.jobs?.[0];
+    const step = job?.steps?.find((item) => item.status === 'in_progress') || job?.steps?.find((item) => item.status === 'queued' || item.status === 'pending');
+    return step?.name || job?.name || '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function setFeedStatus(label, detail, status) {
+  const container = el('feedStatus');
+  if (!container) return;
+  container.className = `feed-status ${status}`;
+  text('feedStatusLabel', label);
+  text('feedStatusDetail', detail);
+}
+
+function scheduleFeedStatusRefresh(delay) {
+  window.clearTimeout(feedStatusTimer);
+  feedStatusTimer = window.setTimeout(updateFeedGenerationStatus, delay);
+}
+
+function isActiveRun(run) {
+  return ['queued', 'pending', 'waiting', 'requested', 'in_progress'].includes(run.status);
+}
+
+function describeConclusion(conclusion) {
+  return conclusion ? conclusion.replace(/_/g, ' ') : 'Unknown status';
+}
 
 async function loadDashboard() {
   showAlert('', false);
@@ -416,6 +489,12 @@ function shortDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return '-';
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return 'unknown time';
+  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function showAlert(message, visible) {
