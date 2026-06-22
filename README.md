@@ -28,6 +28,10 @@ The workflow deploys these files to GitHub Pages:
 index.html       # Static supplier dashboard
 feed.csv         # Generated catalog feed
 feed-meta.json   # Last generation timestamp, product count, row count
+feed-history.json              # Daily feed KPI snapshots
+feed-changes.json              # Latest product movement summary
+product-snapshot.json          # Latest product-level stock snapshot
+product-snapshots-history.json # Product-level stock snapshots retained for time ranges
 ```
 
 ## CSV columns

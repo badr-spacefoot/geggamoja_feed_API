@@ -56,6 +56,9 @@ h1 { font-size: clamp(2rem, 4vw, 4rem); letter-spacing: -.05em; line-height: .95
 .button:hover { box-shadow: 0 10px 20px rgb(0 0 0 / 15%); transform: translateY(-1px); }
 .button.primary { background: #fff; color: var(--primary-strong); }
 .button.secondary { background: rgb(255 255 255 / 12%); color: #fff; outline: 1px solid rgb(255 255 255 / 28%); }
+.panel .button.secondary { background: var(--primary); color: #fff; outline: 0; }
+.button.compact { align-items: center; border-radius: 14px; min-height: 43px; padding: 10px 14px; }
+.button.ghost { background: var(--surface-soft); border: 1px solid var(--border); color: var(--ink); }
 .alert { background: color-mix(in srgb, var(--danger) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 18px; color: var(--danger); font-weight: 700; margin-bottom: 24px; padding: 16px 18px; }
 .kpi-grid { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 24px; }
 .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow); min-height: 120px; padding: 20px; }
@@ -72,6 +75,9 @@ h1 { font-size: clamp(2rem, 4vw, 4rem); letter-spacing: -.05em; line-height: .95
 .chart-panel { min-height: 360px; }
 .chart-panel canvas { max-height: 280px; }
 .history-panel { margin-bottom: 24px; }
+.time-range-bar { align-items: end; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 18px; display: grid; gap: 14px; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); margin: 0 0 18px; padding: 14px; }
+.custom-range-controls { align-items: end; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(140px, 1fr)) auto auto; }
+.range-summary { align-self: center; color: var(--muted); font-size: .86rem; font-weight: 700; grid-column: 1 / -1; line-height: 1.45; margin: -2px 0 0; }
 .trend-grid { display: grid; gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 18px; }
 .trend-card { background: var(--surface-soft); border: 1px solid var(--border); border-radius: 16px; min-height: 92px; padding: 16px; }
 .trend-card span { color: var(--muted); display: block; font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
@@ -134,5 +140,5 @@ input, select { background: var(--surface); border: 1px solid var(--border); bor
 :root[data-theme="dark"] .ean-bad { background: #5f1f1f; color: #fecaca; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.78); } }
-@media (max-width: 1100px) { .kpi-grid, .charts-grid, .two-column, .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters, .catalog-controls, .history-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .page-shell { padding: 16px; } .hero { align-items: flex-start; flex-direction: column; padding: 24px; } .feed-status, .toggle-control { width: 100%; } .hero-actions { justify-content: flex-start; width: 100%; } .button { justify-content: center; width: 100%; } .kpi-grid, .charts-grid, .two-column, .filters, .catalog-controls, .trend-grid, .history-layout { grid-template-columns: 1fr; } .panel { padding: 16px; } table { min-width: 680px; } .catalog-table table { min-width: 1040px; } .history-table table { min-width: 520px; } }
+@media (max-width: 1100px) { .kpi-grid, .charts-grid, .two-column, .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters, .catalog-controls, .history-layout, .time-range-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .custom-range-controls { grid-column: 1 / -1; } }
+@media (max-width: 720px) { .page-shell { padding: 16px; } .hero { align-items: flex-start; flex-direction: column; padding: 24px; } .feed-status, .toggle-control { width: 100%; } .hero-actions { justify-content: flex-start; width: 100%; } .button { justify-content: center; width: 100%; } .kpi-grid, .charts-grid, .two-column, .filters, .catalog-controls, .trend-grid, .history-layout, .time-range-bar, .custom-range-controls { grid-template-columns: 1fr; } .panel { padding: 16px; } table { min-width: 680px; } .catalog-table table { min-width: 1040px; } .history-table table { min-width: 520px; } }

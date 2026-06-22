@@ -11,7 +11,9 @@ const feedPath = path.join(outputDir, 'feed.csv');
 const metadataPath = path.join(outputDir, 'feed-meta.json');
 const historyPath = path.join(outputDir, 'feed-history.json');
 const snapshotPath = path.join(outputDir, 'product-snapshot.json');
+const snapshotHistoryPath = path.join(outputDir, 'product-snapshots-history.json');
 const changesPath = path.join(outputDir, 'feed-changes.json');
+const SNAPSHOT_HISTORY_DAYS = 180;
 
 try {
   const generatedAt = new Date();
@@ -27,6 +29,7 @@ try {
   const snapshot = buildProductSnapshot(records, generatedAt.toISOString());
   const previousSnapshot = await loadPublishedJson('product-snapshot.json');
   const changes = buildChanges(snapshot, previousSnapshot, generatedAt.toISOString());
+  const productSnapshotHistory = await buildProductSnapshotHistory(snapshot, previousSnapshot);
   const history = await buildHistory({
     generatedAt: generatedAt.toISOString(),
     productCount: stats.productCount || productCount,
@@ -54,7 +57,8 @@ try {
         file: 'feed.csv',
         historyFile: 'feed-history.json',
         changesFile: 'feed-changes.json',
-        productSnapshotFile: 'product-snapshot.json'
+        productSnapshotFile: 'product-snapshot.json',
+        productSnapshotHistoryFile: 'product-snapshots-history.json'
       },
       null,
       2
@@ -63,12 +67,14 @@ try {
   );
   await writeFile(historyPath, `${JSON.stringify(history, null, 2)}\n`, 'utf8');
   await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  await writeFile(snapshotHistoryPath, `${JSON.stringify(productSnapshotHistory, null, 2)}\n`, 'utf8');
   await writeFile(changesPath, `${JSON.stringify(changes, null, 2)}\n`, 'utf8');
 
   console.log(`Wrote ${feedPath}`);
   console.log(`Wrote ${metadataPath}`);
   console.log(`Wrote ${historyPath}`);
   console.log(`Wrote ${snapshotPath}`);
+  console.log(`Wrote ${snapshotHistoryPath}`);
   console.log(`Wrote ${changesPath}`);
   console.log(`Generated ${rowCount} CSV rows for ${productCount} products.`);
 } catch (error) {
@@ -119,6 +125,7 @@ function buildProductSnapshot(rows, generatedAt) {
       productType: clean(row.product_type) || 'Unclassified',
       status: clean(row.product_status).toUpperCase() || 'UNKNOWN',
       imageUrl: clean(row.image_url),
+      productUrl: clean(row.product_url),
       stock: 0,
       variantCount: 0,
       skus: []
@@ -127,6 +134,7 @@ function buildProductSnapshot(rows, generatedAt) {
     product.variantCount += 1;
     if (clean(row.variant_sku)) product.skus.push(clean(row.variant_sku));
     if (!product.imageUrl && clean(row.image_url)) product.imageUrl = clean(row.image_url);
+    if (!product.productUrl && clean(row.product_url)) product.productUrl = clean(row.product_url);
     products.set(id, product);
   }
 
@@ -170,6 +178,7 @@ function buildChanges(currentSnapshot, previousSnapshot, generatedAt) {
             title: product.title,
             handle: product.handle,
             productType: product.productType,
+            productUrl: product.productUrl,
             previousStock: toNumber(previous.stock),
             currentStock: product.stock,
             delta
@@ -192,6 +201,7 @@ function buildChanges(currentSnapshot, previousSnapshot, generatedAt) {
             title: product.title,
             handle: product.handle,
             productType: product.productType,
+            productUrl: product.productUrl,
             previousStock: toNumber(previous.stock),
             currentStock: product.stock,
             delta
@@ -210,6 +220,54 @@ function buildChanges(currentSnapshot, previousSnapshot, generatedAt) {
     removedProducts,
     stockDrops,
     stockIncreases
+  };
+}
+
+async function buildProductSnapshotHistory(currentSnapshot, previousSnapshot) {
+  const previousHistory = await loadPublishedJson('product-snapshots-history.json');
+  const existingSnapshots = Array.isArray(previousHistory?.snapshots) ? previousHistory.snapshots : [];
+  const snapshots = [...existingSnapshots];
+
+  if (previousSnapshot?.generatedAt) snapshots.push(previousSnapshot);
+  snapshots.push(currentSnapshot);
+
+  const byDay = new Map();
+  for (const snapshot of snapshots) {
+    const normalized = normalizeProductSnapshot(snapshot);
+    if (!normalized) continue;
+    byDay.set(normalized.generatedAt.slice(0, 10), normalized);
+  }
+
+  return {
+    updatedAt: currentSnapshot.generatedAt,
+    retentionDays: SNAPSHOT_HISTORY_DAYS,
+    snapshots: [...byDay.values()]
+      .sort((a, b) => new Date(a.generatedAt) - new Date(b.generatedAt))
+      .slice(-SNAPSHOT_HISTORY_DAYS)
+  };
+}
+
+function normalizeProductSnapshot(snapshot) {
+  if (!snapshot?.generatedAt || !Array.isArray(snapshot.products)) return null;
+  const generatedAt = new Date(snapshot.generatedAt);
+  if (Number.isNaN(generatedAt.valueOf())) return null;
+
+  return {
+    generatedAt: generatedAt.toISOString(),
+    products: snapshot.products
+      .filter((product) => clean(product.id))
+      .map((product) => ({
+        id: clean(product.id),
+        title: clean(product.title),
+        handle: clean(product.handle),
+        productType: clean(product.productType) || 'Unclassified',
+        status: clean(product.status).toUpperCase() || 'UNKNOWN',
+        imageUrl: clean(product.imageUrl),
+        productUrl: clean(product.productUrl),
+        stock: toNumber(product.stock),
+        variantCount: toNumber(product.variantCount),
+        skus: Array.isArray(product.skus) ? product.skus.map(clean).filter(Boolean).slice(0, 12) : []
+      }))
   };
 }
 

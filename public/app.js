@@ -3,17 +3,22 @@ const ACTIONS_WORKFLOW_RUNS_URL = 'https://api.github.com/repos/badr-spacefoot/g
 const REQUIRED_FIELDS = ['variant_sku', 'barcode', 'price_amount', 'image_url', 'product_type'];
 const EURO = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'EUR' });
 const INT = new Intl.NumberFormat('en-US');
+const DAY_MS = 24 * 60 * 60 * 1000;
 const state = {
   rows: [],
   filteredRows: [],
   groupedRows: [],
   expandedProducts: new Set(),
   history: [],
+  historySnapshots: [],
+  productHistory: [],
+  productHistorySnapshots: [],
   changes: null,
   charts: {},
   sort: { key: 'stock', direction: 'desc' },
   pageSize: 100,
-  groupProducts: false
+  groupProducts: false,
+  timeRange: { preset: 'last-30-days', customFrom: '', customTo: '' }
 };
 let feedStatusTimer = null;
 
@@ -34,6 +39,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bindFilters();
   bindSorting();
   bindGroupedRows();
+  bindTimeRange();
   el('refreshButton').addEventListener('click', loadDashboard);
   loadDashboard();
   updateFeedGenerationStatus();
@@ -118,12 +124,13 @@ async function loadDashboard() {
   showAlert('', false);
   try {
     ensureLibraries();
-    const [metadata, csvText, history, changes] = await Promise.all([loadMetadata(), loadCsvText(), loadHistory(), loadChanges()]);
+    const [metadata, csvText, history, changes, productHistory] = await Promise.all([loadMetadata(), loadCsvText(), loadHistory(), loadChanges(), loadProductHistory()]);
     const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: 'greedy' });
     if (parsed.errors?.length) throw new Error(`CSV parsing failed: ${parsed.errors[0].message}`);
     state.rows = parsed.data.map(normalizeRow).filter((row) => variantKey(row));
     state.history = history;
     state.changes = changes;
+    state.productHistory = productHistory;
     if (state.rows.length === 0) throw new Error('feed.csv was loaded, but it did not contain any variants.');
     renderDashboard(metadata);
   } catch (error) {
@@ -162,6 +169,16 @@ async function loadChanges() {
     return response.ok ? response.json() : null;
   } catch (_error) {
     return null;
+  }
+}
+
+async function loadProductHistory() {
+  try {
+    const response = await fetch(`product-snapshots-history.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' } });
+    const payload = response.ok ? await response.json() : null;
+    return Array.isArray(payload?.snapshots) ? payload.snapshots : [];
+  } catch (_error) {
+    return [];
   }
 }
 
@@ -204,8 +221,9 @@ function renderDashboard(metadata) {
   const lastGenerated = metadata?.generatedAt ? new Date(metadata.generatedAt) : stats.lastUpdated;
   text('lastUpdated', lastGenerated ? `Last CSV update: ${lastGenerated.toLocaleString()}` : 'Last CSV update: unavailable');
   renderCharts(stats);
-  renderHistory(stats, metadata);
-  renderChanges();
+  state.historySnapshots = normalizeHistory([...state.history, buildCurrentSnapshot(stats, metadata)]);
+  state.productHistorySnapshots = normalizeProductHistory([...state.productHistory, buildCurrentProductSnapshot(state.rows, metadata)]);
+  renderTimeBoundSections();
   renderProductTypes(stats.productTypes);
   renderRecentUpdates(state.rows);
   populateFilters(state.rows);
@@ -270,21 +288,22 @@ function renderCharts(stats) {
   state.charts.missing = new Chart(el('missingChart'), { type: 'bar', data: { labels: ['Missing barcode', 'Bad EAN', 'Missing image', 'Missing price', 'Missing stock value', 'Missing product type'], datasets: [{ label: 'Variants', data: [stats.missing.barcode, stats.badEans, stats.missing.image_url, stats.missing.price_amount, stats.missingStock, stats.missing.product_type], backgroundColor: '#d95f59' }] }, options: chartOptions() });
 }
 
-function renderHistory(stats, metadata) {
-  const currentSnapshot = buildCurrentSnapshot(stats, metadata);
-  const snapshots = normalizeHistory([...state.history, currentSnapshot]);
-  const latest = snapshots.at(-1);
-  const previous = snapshots.length > 1 ? snapshots.at(-2) : null;
-  text('deltaProducts', formatDelta(latest?.productCount, previous?.productCount));
-  text('deltaVariants', formatDelta(latest?.variantCount, previous?.variantCount));
-  text('deltaStock', formatDelta(latest?.totalStock, previous?.totalStock));
-  text('deltaQuality', formatDelta(latest?.qualityScore, previous?.qualityScore, '%'));
-  renderHistoryChart(snapshots);
-  renderHistoryTable(snapshots);
-}
-
 function buildCurrentSnapshot(stats, metadata) {
   return { generatedAt: metadata?.generatedAt || new Date().toISOString(), productCount: stats.totalProducts, variantCount: stats.totalVariants, activeVariants: stats.activeVariants, draftVariants: stats.draftVariants, totalStock: stats.totalStock, variantsWithStock: stats.variantsWithStock, variantsOutOfStock: stats.variantsOutOfStock, qualityScore: stats.qualityScore, badEans: stats.badEans, rowCount: metadata?.rowCount ?? stats.totalVariants };
+}
+
+function buildCurrentProductSnapshot(rows, metadata) {
+  const products = new Map();
+  for (const row of uniqueRows(rows, variantKey)) {
+    const id = productKey(row);
+    if (!id) continue;
+    const product = products.get(id) ?? { id, title: row.product_title, handle: row.product_handle, productType: row.productType, productUrl: row.product_url, stock: 0, variantCount: 0 };
+    product.stock += row.stock;
+    product.variantCount += 1;
+    if (!product.productUrl && row.product_url) product.productUrl = row.product_url;
+    products.set(id, product);
+  }
+  return { generatedAt: metadata?.generatedAt || new Date().toISOString(), products: [...products.values()] };
 }
 
 function normalizeHistory(snapshots) {
@@ -298,6 +317,201 @@ function normalizeHistory(snapshots) {
   return [...byDate.values()].sort((a, b) => new Date(a.generatedAt) - new Date(b.generatedAt)).slice(-60);
 }
 
+function normalizeProductHistory(snapshots) {
+  const byDate = new Map();
+  for (const snapshot of snapshots) {
+    if (!snapshot?.generatedAt || !Array.isArray(snapshot.products)) continue;
+    const date = new Date(snapshot.generatedAt);
+    if (Number.isNaN(date.valueOf())) continue;
+    byDate.set(date.toISOString().slice(0, 10), {
+      generatedAt: date.toISOString(),
+      products: snapshot.products.filter((product) => clean(product.id)).map((product) => ({
+        id: clean(product.id),
+        title: clean(product.title),
+        handle: clean(product.handle),
+        productType: clean(product.productType) || 'Unclassified',
+        productUrl: clean(product.productUrl),
+        stock: toNumber(product.stock),
+        variantCount: toNumber(product.variantCount)
+      }))
+    });
+  }
+  return [...byDate.values()].sort((a, b) => new Date(a.generatedAt) - new Date(b.generatedAt)).slice(-180);
+}
+
+function bindTimeRange() {
+  const preset = el('timeRangePreset');
+  const customControls = el('customRangeControls');
+  if (!preset || !customControls) return;
+  preset.addEventListener('input', () => {
+    state.timeRange.preset = preset.value;
+    customControls.hidden = preset.value !== 'custom';
+    if (preset.value !== 'custom') renderTimeBoundSections();
+  });
+  el('applyCustomRange').addEventListener('click', () => {
+    state.timeRange.customFrom = el('customRangeFrom').value;
+    state.timeRange.customTo = el('customRangeTo').value;
+    renderTimeBoundSections();
+  });
+  el('resetCustomRange').addEventListener('click', () => {
+    state.timeRange = { preset: 'last-30-days', customFrom: '', customTo: '' };
+    preset.value = state.timeRange.preset;
+    el('customRangeFrom').value = '';
+    el('customRangeTo').value = '';
+    customControls.hidden = true;
+    renderTimeBoundSections();
+  });
+}
+
+function renderTimeBoundSections() {
+  const bounds = getSelectedTimeRange();
+  const historySnapshots = filterSnapshots(state.historySnapshots, bounds);
+  const latest = historySnapshots.at(-1);
+  const first = historySnapshots.length > 1 ? historySnapshots[0] : null;
+  text('deltaProducts', formatDelta(latest?.productCount, first?.productCount));
+  text('deltaVariants', formatDelta(latest?.variantCount, first?.variantCount));
+  text('deltaStock', formatDelta(latest?.totalStock, first?.totalStock));
+  text('deltaQuality', formatDelta(latest?.qualityScore, first?.qualityScore, '%'));
+  renderHistoryChart(historySnapshots);
+  renderHistoryTable(historySnapshots);
+  renderMovementForRange(bounds);
+  updateTimeRangeSummary(bounds, historySnapshots);
+}
+
+function getSelectedTimeRange() {
+  const anchor = getLatestSnapshotDate() || new Date();
+  const preset = state.timeRange.preset;
+  if (preset === 'custom') return getCustomRange(anchor);
+  if (preset === 'last-24-hours') return { label: 'Last 24 hours', from: new Date(anchor.getTime() - DAY_MS), to: anchor };
+  if (preset.startsWith('last-')) {
+    const days = toNumber(preset.match(/^last-(\d+)-days$/)?.[1]);
+    return { label: labelForPreset(preset), from: startOfDay(addDays(anchor, -(days - 1))), to: endOfDay(anchor) };
+  }
+  if (preset === 'today') return { label: 'Today', from: startOfDay(anchor), to: endOfDay(anchor) };
+  if (preset === 'yesterday') return { label: 'Yesterday', from: startOfDay(addDays(anchor, -1)), to: endOfDay(addDays(anchor, -1)) };
+  if (preset === 'this-week') return { label: 'This week', from: startOfWeek(anchor), to: endOfDay(anchor) };
+  if (preset === 'previous-week') {
+    const thisWeek = startOfWeek(anchor);
+    const previousWeek = addDays(thisWeek, -7);
+    return { label: 'Previous week', from: previousWeek, to: endOfDay(addDays(previousWeek, 6)) };
+  }
+  if (preset === 'this-month') return { label: 'This month', from: new Date(anchor.getFullYear(), anchor.getMonth(), 1), to: endOfDay(anchor) };
+  if (preset === 'previous-month') return { label: 'Previous month', from: new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1), to: endOfDay(new Date(anchor.getFullYear(), anchor.getMonth(), 0)) };
+  if (preset === 'month-to-date') return { label: 'Month to date', from: new Date(anchor.getFullYear(), anchor.getMonth(), 1), to: anchor };
+  if (preset === 'quarter-to-date') return { label: 'Quarter to date', from: startOfQuarter(anchor), to: anchor };
+  if (preset === 'this-quarter') return { label: 'This quarter', from: startOfQuarter(anchor), to: endOfDay(anchor) };
+  if (preset === 'previous-quarter') {
+    const quarterStart = startOfQuarter(anchor);
+    const previousStart = new Date(quarterStart.getFullYear(), quarterStart.getMonth() - 3, 1);
+    return { label: 'Previous quarter', from: previousStart, to: endOfDay(new Date(quarterStart.getFullYear(), quarterStart.getMonth(), 0)) };
+  }
+  return { label: 'Last 30 days', from: startOfDay(addDays(anchor, -29)), to: endOfDay(anchor) };
+}
+
+function getCustomRange(anchor) {
+  const from = parseDateInput(state.timeRange.customFrom) || getEarliestSnapshotDate() || startOfDay(addDays(anchor, -29));
+  const to = parseDateInput(state.timeRange.customTo, true) || endOfDay(anchor);
+  return { label: 'Selected range', from, to };
+}
+
+function renderMovementForRange(bounds) {
+  const endpoints = getProductRangeEndpoints(bounds);
+  if (!endpoints) {
+    renderLegacyChanges();
+    return;
+  }
+  const { start, end } = endpoints;
+  const startProducts = new Map(start.products.map((product) => [product.id, product]));
+  const endProducts = new Map(end.products.map((product) => [product.id, product]));
+  const snapshotsInRange = filterSnapshots(state.productHistorySnapshots, bounds);
+  const firstSeenDates = buildFirstSeenDates(snapshotsInRange);
+  const newProducts = [...endProducts.values()]
+    .filter((product) => !startProducts.has(product.id))
+    .map((product) => ({ ...product, firstSeenAt: firstSeenDates.get(product.id) || end.generatedAt }))
+    .sort((a, b) => new Date(a.firstSeenAt) - new Date(b.firstSeenAt) || b.stock - a.stock)
+    .slice(0, 12);
+  const stockDrops = [...endProducts.values()]
+    .map((product) => {
+      const previous = startProducts.get(product.id);
+      if (!previous) return null;
+      const delta = product.stock - previous.stock;
+      if (delta >= 0) return null;
+      return { ...product, previousStock: previous.stock, currentStock: product.stock, delta };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.delta - b.delta)
+    .slice(0, 12);
+  renderNewProducts(newProducts);
+  renderStockMovers(stockDrops);
+}
+
+function renderLegacyChanges() {
+  const newProducts = Array.isArray(state.changes?.newProducts) ? state.changes.newProducts : [];
+  const stockDrops = Array.isArray(state.changes?.stockDrops) ? state.changes.stockDrops : [];
+  renderNewProducts(newProducts.map((item) => ({ ...item, firstSeenAt: item.firstSeenAt || state.changes?.generatedAt })));
+  renderStockMovers(stockDrops);
+}
+
+function renderNewProducts(newProducts) {
+  el('newProductsBody').innerHTML = newProducts.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${escapeHtml(item.productType || '-')}</td><td>${shortDate(item.firstSeenAt)}</td><td>${INT.format(item.stock || 0)}</td></tr>`).join('') || '<tr><td colspan="4">No newly added products detected in this range.</td></tr>';
+}
+
+function renderStockMovers(stockDrops) {
+  el('stockMoversBody').innerHTML = stockDrops.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${INT.format(item.previousStock || 0)}</td><td>${INT.format(item.currentStock || 0)}</td><td><span class="badge stock-out">${INT.format(item.delta || 0)}</span></td></tr>`).join('') || '<tr><td colspan="4">No stock decreases detected in this range.</td></tr>';
+}
+
+function getProductRangeEndpoints(bounds) {
+  if (state.productHistorySnapshots.length < 2) return null;
+  const snapshots = filterSnapshots(state.productHistorySnapshots, bounds);
+  if (snapshots.length >= 2) return { start: snapshots[0], end: snapshots.at(-1) };
+  const beforeEnd = state.productHistorySnapshots.filter((snapshot) => new Date(snapshot.generatedAt) <= bounds.to);
+  const end = beforeEnd.at(-1);
+  if (!end) return null;
+  const start = beforeEnd.find((snapshot) => new Date(snapshot.generatedAt) >= bounds.from) || beforeEnd[0];
+  if (!start || start.generatedAt === end.generatedAt) return null;
+  return { start, end };
+}
+
+function buildFirstSeenDates(snapshots) {
+  const seen = new Map();
+  for (const snapshot of snapshots) {
+    for (const product of snapshot.products) {
+      if (!seen.has(product.id)) seen.set(product.id, snapshot.generatedAt);
+    }
+  }
+  return seen;
+}
+
+function filterSnapshots(snapshots, bounds) {
+  return snapshots.filter((snapshot) => {
+    const date = new Date(snapshot.generatedAt);
+    return !Number.isNaN(date.valueOf()) && date >= bounds.from && date <= bounds.to;
+  });
+}
+
+function updateTimeRangeSummary(bounds, visibleHistory) {
+  const availableStart = getEarliestSnapshotDate();
+  const availableEnd = getLatestSnapshotDate();
+  const visibleText = visibleHistory.length ? `${INT.format(visibleHistory.length)} recovery snapshots in range` : 'No recovery snapshots in range';
+  const movementText = state.productHistorySnapshots.length >= 2 ? `${INT.format(state.productHistorySnapshots.length)} product snapshots available` : 'Product movement will expand after the next feed run';
+  const availableText = availableStart && availableEnd ? `Available: ${formatDateOnly(availableStart)} - ${formatDateOnly(availableEnd)}` : 'Available snapshots: none yet';
+  text('timeRangeSummary', `${bounds.label}: ${formatDateOnly(bounds.from)} - ${formatDateOnly(bounds.to)}. ${availableText}. ${visibleText}; ${movementText}.`);
+}
+
+function getLatestSnapshotDate() {
+  const dates = [...state.historySnapshots, ...state.productHistorySnapshots].map((snapshot) => new Date(snapshot.generatedAt)).filter((date) => !Number.isNaN(date.valueOf()));
+  return dates.sort((a, b) => b - a)[0] ?? null;
+}
+
+function getEarliestSnapshotDate() {
+  const dates = [...state.historySnapshots, ...state.productHistorySnapshots].map((snapshot) => new Date(snapshot.generatedAt)).filter((date) => !Number.isNaN(date.valueOf()));
+  return dates.sort((a, b) => a - b)[0] ?? null;
+}
+
+function labelForPreset(preset) {
+  return preset.replace(/^last-/, 'Last ').replace(/-/g, ' ');
+}
+
 function renderHistoryChart(snapshots) {
   destroyCharts(['history']);
   if (snapshots.length === 0) { el('historyBody').innerHTML = '<tr><td colspan="5">No history available yet.</td></tr>'; return; }
@@ -307,13 +521,6 @@ function renderHistoryChart(snapshots) {
 function renderHistoryTable(snapshots) {
   const rows = snapshots.slice(-10).reverse().map((snapshot) => `<tr><td>${shortDate(snapshot.generatedAt)}</td><td>${INT.format(snapshot.productCount)}</td><td>${INT.format(snapshot.variantCount)}</td><td>${INT.format(snapshot.totalStock)}</td><td>${INT.format(snapshot.qualityScore)}%</td></tr>`).join('');
   el('historyBody').innerHTML = rows || '<tr><td colspan="5">No history available yet.</td></tr>';
-}
-
-function renderChanges() {
-  const newProducts = Array.isArray(state.changes?.newProducts) ? state.changes.newProducts : [];
-  const stockDrops = Array.isArray(state.changes?.stockDrops) ? state.changes.stockDrops : [];
-  el('newProductsBody').innerHTML = newProducts.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${escapeHtml(item.productType || '-')}</td><td>${INT.format(item.variantCount || 0)}</td><td>${INT.format(item.stock || 0)}</td></tr>`).join('') || '<tr><td colspan="4">No newly added products detected yet.</td></tr>';
-  el('stockMoversBody').innerHTML = stockDrops.slice(0, 12).map((item) => `<tr><td>${renderProductLink(item.title || item.handle || '-', item.productUrl)}</td><td>${INT.format(item.previousStock || 0)}</td><td>${INT.format(item.currentStock || 0)}</td><td><span class="badge stock-out">${INT.format(item.delta || 0)}</span></td></tr>`).join('') || '<tr><td colspan="4">No stock decreases detected yet.</td></tr>';
 }
 
 function chartOptions(extra = {}) { return { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }, scales: extra.indexAxis ? undefined : { y: { beginAtZero: true, ticks: { precision: 0 } } }, ...extra }; }
@@ -508,6 +715,7 @@ function isValidEan(value) {
 function renderEmptyState() {
   ['totalProducts', 'totalVariants', 'activeVariants', 'draftVariants', 'totalStock', 'variantsWithStock', 'badEans', 'qualityScore', 'missingBarcode', 'badEansDetail', 'missingImage', 'missingPrice', 'missingStock', 'outOfStockDetail', 'missingProductType', 'deltaProducts', 'deltaVariants', 'deltaStock', 'deltaQuality'].forEach((id) => text(id, '-'));
   text('lastUpdated', 'Last CSV update: unavailable');
+  text('timeRangeSummary', 'No snapshots available.');
   el('productTypesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
   el('recentUpdatesBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
   el('newProductsBody').innerHTML = '<tr><td colspan="4">No data available.</td></tr>';
@@ -517,8 +725,42 @@ function renderEmptyState() {
   destroyCharts();
 }
 
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function endOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+function startOfWeek(date) {
+  const start = startOfDay(date);
+  const offset = (start.getDay() + 6) % 7;
+  return addDays(start, -offset);
+}
+
+function startOfQuarter(date) {
+  return new Date(date.getFullYear(), Math.floor(date.getMonth() / 3) * 3, 1);
+}
+
+function parseDateInput(value, end = false) {
+  if (!value) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.valueOf())) return null;
+  return end ? endOfDay(date) : startOfDay(date);
+}
+
 function formatDelta(current, previous, suffix = '') { if (current == null || previous == null) return '-'; const delta = current - previous; return `${delta > 0 ? '+' : ''}${INT.format(delta)}${suffix}`; }
 function shortDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '-' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }
+function formatDateOnly(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '-' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); }
 function formatDateTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? 'unknown time' : date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); }
 function showAlert(message, visible) { const alert = el('alert'); alert.textContent = message; alert.hidden = !visible; }
 function escapeHtml(value) { return clean(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
